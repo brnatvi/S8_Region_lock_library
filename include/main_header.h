@@ -31,8 +31,8 @@
 
 #define PROC_ERROR(Message) { fprintf(stderr, "%s : error {%s} in file {%s} on line {%d}\n", Message, strerror(errno), __FILE__, __LINE__); }
 
-#define LOCK_ERROR(Code) if (Code != 0) { PROC_ERROR("mutex_lock() failure"); }
-#define UNLOCK_ERROR(Code) if (Code != 0) { PROC_ERROR("mutex_unlock() failure"); }
+#define LOCK_ERROR(Code) if (Code != 0) { fprintf(stderr, "%s : error {%d} in file {%s} on line {%d}\n", "mutex_lock() failure", strerror(Code), __FILE__, __LINE__); }
+#define UNLOCK_ERROR(Code) if (Code != 0) { fprintf(stderr, "%s : error {%d} in file {%s} on line {%d}\n", "mutex_unlock() failure", strerror(Code), __FILE__, __LINE__); }
 
 /* ======================================= STRUCTURES =============================================================== */
 

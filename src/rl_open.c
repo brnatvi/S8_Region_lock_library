@@ -28,9 +28,10 @@ rl_descriptor rl_open(const char *path, int oflag, ...)
     if (NULL == sharedMemName)
     {
         PROC_ERROR("getSharedMemoryName() failure");
+        goto lBadExit;
     }
     
-    // open shared memory obgect
+    // open shared memory object
     fdSharedMem = shm_open(sharedMemName
                                         , O_CREAT | O_RDWR
                                         , S_IRUSR | S_IRGRP | S_IROTH | S_IWUSR | S_IWGRP | S_IWOTH);

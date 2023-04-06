@@ -20,3 +20,11 @@ int initialiserCond(pthread_cond_t *pCond);
  * @return char* of shared memory object name if succesful, NULL otherwise
  */
 char* getSharedMemoryName(const char *filePath);
+
+/**
+ * Test equality between two owners
+ * @param o1 owner
+ * @param o2 owener
+ * @return 1 if equals 0 otherwisz
+ */
+int ownerEquals(owner o1, owner o2);

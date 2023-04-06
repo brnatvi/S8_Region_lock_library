@@ -18,8 +18,8 @@
 /* ==================================== MACRO VARIABLES ============================================================= */
 
 #define NB_OWNERS 20
-#define NB_LOCKS 10
-#define NB_FILES 256
+#define NB_LOCKS  10
+#define NB_FILES  256
 #define SHARED_MEM_FORMAT "/f_%ld_%ld"
 
 /* ==================================== MACRO FUNCTIONS ============================================================= */
@@ -28,6 +28,7 @@
 #define KILL_SEMATHORE(Sem) if (Sem)  { sem_close(Sem); sem_destroy(Sem); }
 #define UNLINK_SEMATHORE(Name) if (Name) { sem_unlink(Name); }
 #define FREE_MMAP(Mem, len) if (Mem) { munmap(Mem, len); }
+#define FREE_MEM(Mem) if (Mem) { free(Mem); Mem = NULL; }
 
 #define PROC_ERROR(Message) { fprintf(stderr, "%s : error {%s} in file {%s} on line {%d}\n", Message, strerror(errno), __FILE__, __LINE__); }
 

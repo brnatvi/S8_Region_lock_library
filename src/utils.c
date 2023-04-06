@@ -38,15 +38,17 @@ int initialiserCond(pthread_cond_t *pCond)
 
 char* getSharedMemoryName(const char *filePath)
 {
-    char* name;
+    char* name = malloc(256 * sizeof(char));
     int returnValue = -1;
     struct stat statBuffer;
+    
     returnValue = stat(filePath, &statBuffer);
     if (returnValue < 0)
     {
         PROC_ERROR("stat() failure");
         return NULL;
     }
-    sprintf(name, SHARED_MEM_FORMAT, statBuffer.st_dev, statBuffer.st_ino);    
+ 
+    sprintf(name, SHARED_MEM_FORMAT, statBuffer.st_dev, statBuffer.st_ino);
     return name;
 }

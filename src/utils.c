@@ -58,3 +58,7 @@ char* getSharedMemoryName(const char *filePath)
     sprintf(name, SHARED_MEM_FORMAT, statBuffer.st_dev, statBuffer.st_ino);
     return name;
 }
+
+int ownerEquals(owner o1, owner o2){
+    return (o1.des == o2.des) && (o1.proc == o2.proc);
+}

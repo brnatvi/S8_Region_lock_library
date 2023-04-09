@@ -42,6 +42,12 @@ char* getSharedMemoryName(const char *filePath)
     int returnValue = -1;
     struct stat statBuffer;
     
+    if (!name)
+    {
+        PROC_ERROR("malloc() failure");
+        return NULL;
+    }
+
     returnValue = stat(filePath, &statBuffer);
     if (returnValue < 0)
     {

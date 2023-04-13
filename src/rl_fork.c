@@ -7,17 +7,16 @@ pid_t rl_fork() {
             PROC_ERROR("fork() failure");
             return -1;
         case 0 :
-            pid_t parent = getppid();
-            pid_t fils = getpid();
+            
             for(int i = 0; i < rl_all_files.nb_files; i++){
-                if(canAddNewOwner(parent, rl_all_files.tab_open_files[i]) == -1) {
+                if(canAddNewOwnerByPid(getppid(), rl_all_files.tab_open_files[i]) == -1) {
                     // gestion erreur
                     PROC_ERROR("rl_fork() failure NB_OWNERS at max");
                     return -1;
                 }
             }
             for(int i = 0; i < rl_all_files.nb_files; i++){
-                addNewOwner(parent, fils, rl_all_files.tab_open_files[i]);
+                addNewOwnerByPid(getppid(), getpid(), rl_all_files.tab_open_files[i]);
             }
             exit(EXIT_SUCCESS);
         default :
@@ -31,7 +30,7 @@ pid_t rl_fork() {
 }
 
 // -1 si impossible, 0 sinon
-int canAddNewOwner(pid_t parent, rl_open_file *f){
+int canAddNewOwnerByPid(pid_t parent, rl_open_file *f){
     int ind = f->first;
     
     // loop through lock_table
@@ -50,7 +49,7 @@ int canAddNewOwner(pid_t parent, rl_open_file *f){
 }
 
 // assume we can add
-int addNewOwner(pid_t parent, pid_t fils, rl_open_file *f){
+int addNewOwnerByPid(pid_t parent, pid_t fils, rl_open_file *f){
     int ind = f->first;
     while(ind != -1){
         int tmp = (int) f->lock_table[ind].nb_owners;

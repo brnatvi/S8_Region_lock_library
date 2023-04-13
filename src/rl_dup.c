@@ -20,6 +20,8 @@ rl_descriptor rl_dup(rl_descriptor lfd){
     if(add == 1) {
         addNewOwner(own, new_owner, lfd.f);
     }
+    rl_descriptor new_descr = {.d = newd, .f = lfd.f};
+    return new_descr;
 }
 
 rl_descriptor rl_dup2(rl_descriptor lfd, int newd) {

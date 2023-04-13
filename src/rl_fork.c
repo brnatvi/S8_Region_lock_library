@@ -13,7 +13,7 @@ pid_t rl_fork() {
                 if(canAddNewOwner(parent, rl_all_files.tab_open_files[i]) == -1) {
                     // gestion erreur
                     PROC_ERROR("rl_fork() failure NB_OWNERS at max");
-                    exit(EXIT_FAILURE);
+                    return -1;
                 }
             }
             for(int i = 0; i < rl_all_files.nb_files; i++){

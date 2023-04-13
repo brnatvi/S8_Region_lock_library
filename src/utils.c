@@ -1,4 +1,4 @@
-#include "utils.h"
+#include "../include/utils.h"
 
 int initialiserMutex(pthread_mutex_t *pMutex)
 {
@@ -56,3 +56,4 @@ char* getSharedMemoryName(const char *filePath)
 int ownerEquals(owner o1, owner o2){
     return (o1.des == o2.des) && (o1.proc == o2.proc);
 }
+

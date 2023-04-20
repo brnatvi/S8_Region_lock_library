@@ -9,6 +9,8 @@
 #include <sys/mman.h>       /* for shm_open */
 #include <sys/stat.h>       /* for mode constants */
 #include <fcntl.h>          /* for O_* constants and fcntl */
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #include <semaphore.h>
 #include <pthread.h>

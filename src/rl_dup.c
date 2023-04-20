@@ -1,5 +1,4 @@
-#include "rl_dup.h"
-#include "rl_open.h"
+#include "../include/rl_dup.h"
 
 rl_descriptor rl_dup(rl_descriptor lfd){
     int newd = dup(lfd.d);
@@ -10,7 +9,19 @@ rl_descriptor rl_dup(rl_descriptor lfd){
         rl_descriptor bad = {.d = -1, .f = NULL};
         return bad;
     }
-    return dup_function(lfd, newd);
+    owner own = {.des = lfd.d, .proc = getpid()};
+    int add = canAddNewOwner(own, lfd.f);
+    if(add == -1) {
+        PROC_ERROR("rl_dup() failure NB_OWNERS at max");
+        rl_descriptor bad = {.d = -1, .f = NULL};
+        return bad;
+    }
+    owner new_owner = {.des = newd, .proc = getpid()};
+    if(add == 1) {
+        addNewOwner(own, new_owner, lfd.f);
+    }
+    rl_descriptor new_descr = {.d = newd, .f = lfd.f};
+    return new_descr;
 }
 
 rl_descriptor rl_dup2(rl_descriptor lfd, int newd) {
@@ -19,49 +30,53 @@ rl_descriptor rl_dup2(rl_descriptor lfd, int newd) {
         rl_descriptor bad = {.d = -1, .f = NULL};
         return bad;
     }
-    return dup_function(lfd, newd);
-}
-
-rl_descriptor dup_function(rl_descriptor lfd, int newd) {
-    if(add_new_owner(lfd, newd) == -1){
-        PROC_ERROR("rl_dup2() failure : NB_LOCKS at max");
+    owner own = {.des = lfd.d, .proc = getpid()};
+    int add = canAddNewOwner(own, lfd.f);
+    if(add == -1) {
+        PROC_ERROR("rl_dup() failure NB_OWNERS at max");
         rl_descriptor bad = {.d = -1, .f = NULL};
-        CLOSE_FILE(newd);
         return bad;
     }
-    rl_descriptor new_rl_descriptor = {.d = newd, .f = lfd.f};
-    return new_rl_descriptor;
+    owner new_owner = {.des = newd, .proc = getpid()};
+    if(add == 1) {
+        addNewOwner(own, new_owner, lfd.f);
+    }
+    rl_descriptor new_descr = {.d = newd, .f = lfd.f};
+    return new_descr;
+    
 }
 
-int add_new_owner(rl_descriptor lfd, int newd) {
-    owner lfd_owner = {.proc = getpid(), .des = lfd.d};
-    owner new_owner = {.proc = getpid(), .des = newd};
-
-    int ind = lfd.f->first;
+// 1 si oui, 0 si own non dans table, -1 si capacité max
+int canAddNewOwner(owner own, rl_open_file *f){
+    int ind = f->first;
+    int present = 0; // boolean
     while(ind != -1) {
-        size_t nbOwners = lfd.f->lock_table[ind].nb_owners;
-
-        // parcours de lock_owners
-        for(size_t j = 0; j < nbOwners; j++){
-            if(ownerEquals(lfd.f->lock_table[ind].lock_owners[j], lfd_owner)) {
-                // test si place pour ajouter nouveau propriétaire
-                if(nbOwners < NB_OWNERS) {
-                    lfd.f->lock_table[ind].lock_owners[nbOwners] = new_owner;
-                    lfd.f->lock_table[ind].nb_owners++;
-                    break;
-                }
-                else {
-                    return -1;
-                }
+        for(size_t i = 0; i < f->lock_table[ind].nb_owners; i++){
+            if(ownerEquals(f->lock_table[ind].lock_owners[i], own)
+            && f->lock_table[ind].nb_owners == NB_OWNERS) { 
+                return -1;
+            }
+            if(ownerEquals(f->lock_table[ind].lock_owners[i], own)) {
+                present = 1;
             }
         }
-        // indice du prochain rl_lock
-        ind = lfd.f->lock_table[ind].next_lock;       
+        ind = f->lock_table[ind].next_lock;
     }
-    return 0;
+    return present;
 }
 
-int main(int argc, const char *argv[])
-{
-    return EXIT_SUCCESS;
+// assume we can add
+int addNewOwner(owner own, owner new_owner, rl_open_file *f){
+    int ind = f->first;
+    while(ind != -1) {
+        int tmp = (int) f->lock_table[ind].nb_owners;
+        for(size_t i = 0; i < f->lock_table[ind].nb_owners; i++){
+            if(ownerEquals(f->lock_table[ind].lock_owners[i], own)){
+                f->lock_table[ind].lock_owners[tmp] = new_owner;
+                f->lock_table[ind].nb_owners ++;
+            }
+        }
+        ind = f->lock_table[ind].next_lock;
+    }
+    return 0;
 }

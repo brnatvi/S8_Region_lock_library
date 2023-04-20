@@ -1,4 +1,4 @@
-#include "../include/rl_dup.h"
+#include "rl_dup.h"
 
 rl_descriptor rl_dup(rl_descriptor lfd){
     int newd = dup(lfd.d);

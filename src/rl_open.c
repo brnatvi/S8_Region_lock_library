@@ -9,135 +9,169 @@ rl_descriptor rl_open(const char *path, int oflag, ...)
     va_list        parameters;
     mode_t         mode                   = -1;
     int            fdFile, fdSharedMemory = -1;
-    char*          sharedMemName          = NULL;
-    rl_open_file*  stRlOpenFile           = NULL;
-    rl_descriptor* stRlDescriptor         = NULL;
+    char           pSharedMemName[SHARED_NAME_MAX_LEN];
+    char           pSharedSemName[SHARED_NAME_MAX_LEN];
+    sem_t         *sharedSem              = NULL;
+    rl_open_file*  pRlOpenFile            = NULL;
+    rl_descriptor  stRlDescriptor         = {.d = -1, .f = NULL};
+    bool           isNewFile              = true;
+    bool           isError                = false;
     
     // ======================================== get arguments ==========================================================
     
-    va_start(parameters, oflag);
-    mode = (mode_t)va_arg(parameters, int);
-    va_end(parameters);
-
-    // ========================================= create rl_descriptor ==================================================
-
-    stRlDescriptor = malloc(sizeof(rl_descriptor));
-    if (NULL == stRlDescriptor)
+    if (oflag & O_CREAT)
     {
-        PROC_ERROR("malloc() for rl_descriptor failure");
-        exit(EXIT_FAILURE);
+        va_start(parameters, oflag);
+        mode = (mode_t)va_arg(parameters, int);
+        va_end(parameters);
     }
-    memset(stRlDescriptor, 0, sizeof(rl_descriptor));
-    stRlDescriptor->d = -1;
 
-    // =============================== reject open if size rl_all_files + 1 > NB_FILES =================================
+    pthread_mutex_lock(&rl_all_files.mutex);
 
     if (NB_FILES == rl_all_files.nb_files)
     {
         PROC_ERROR("Unable to proceed rl_open because the library's limit on the number of open files (NB_FILES) has been reached");
-        goto lBadExit;
+        isError = true;
+        goto lExit;
     }
-    
-    // =================== open or create shared memory object =========================================================
 
-    // obtain shared memory name
-    sharedMemName = getSharedMemoryName(path);
-    if (NULL == sharedMemName)
-    {
-        PROC_ERROR("getSharedMemoryName() failure");
-        goto lBadExit;
-    }
-    printf("\n name %s\n", sharedMemName);
-    
-
-    // open/create shared memory object
-    fdSharedMemory = shm_open(sharedMemName, O_CREAT|O_RDWR|O_EXCL, S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH);
-    if (-1 == fdSharedMemory)
-    {
-        printf(" fdSharedMemory %d\n", fdSharedMemory);
-        
-        if (EEXIST == errno)        // shared memory already exist
-        {            
-            // try to open it again to read/write
-            fdSharedMemory = shm_open(sharedMemName, O_RDWR, S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH);
-            if (-1 == fdSharedMemory)
-            {
-                PROC_ERROR("shm_open() with only O_RDWR failure");
-                goto lBadExit;  
-            }
-
-            // map object to memory
-            stRlOpenFile = mmap(0, sizeof(rl_open_file), PROT_READ|PROT_WRITE, MAP_SHARED, fdSharedMemory, 0);
-            if (MAP_FAILED == (void *)stRlOpenFile)
-            {
-                PROC_ERROR("mmap() failure");
-                goto lBadExit;
-            }
-        }
-        else    // another errors
-        {        
-            PROC_ERROR("shm_open() with O_CREAT|O_EXCL failure");
-            goto lBadExit;
-        }
-    }
-    else    // shared memory does not exist yet
-    {
-        // =================================== project to memory, trancate =============================================
-        // allocate necessary size of memory
-        if (ftruncate(fdSharedMemory, sizeof(rl_open_file)))
-        {
-            PROC_ERROR("ftruncate() failure");
-            goto lBadExit;
-        }
-
-        // map object to memory
-        stRlOpenFile = mmap(0, sizeof(rl_open_file), PROT_READ|PROT_WRITE, MAP_SHARED, fdSharedMemory, 0);
-        if (MAP_FAILED == (void *)stRlOpenFile)
-        {
-            PROC_ERROR("mmap() failure");
-            goto lBadExit;
-        }
-        memset(stRlOpenFile, 0, sizeof(rl_open_file));
-
-        // TODO really need?
-        memset(stRlOpenFile->lock_table, 0, NB_LOCKS * sizeof(rl_lock));  /* sinon, rl_open crée un shared memory object 
-                                                                            de taille sizeof(rl_open_file), le projette
-                                                            en mémoire, et initialise les éléments de tableau lock_table */
-    } 
-    
-    // ============================================= open file =========================================================
-    
+    //first open the file, if we can't - everything else is useless 
     fdFile = open(path, oflag, mode);
     if (fdFile < 0)
     {
         PROC_ERROR("open() file failure");
-        goto lBadExit;
+        isError = true;
+        goto lExit;
     }
 
-    // ========================================= put new fd into rl_descriptor =========================================
+   
+    // =================== open or create shared memory object =========================================================
+    if (    (!makeSharedNameByPath(path, SHARED_PREFIX_MEM, pSharedMemName, SHARED_NAME_MAX_LEN))
+         || (!makeSharedNameByPath(path, SHARED_PREFIX_SEM, pSharedSemName, SHARED_NAME_MAX_LEN))
+       )
+    {
+        PROC_ERROR("making shared names failure!");
+        isError = true;
+        goto lExit;
+    }
 
-    stRlDescriptor->d = fdFile;
-    stRlDescriptor->f = stRlOpenFile;
+    printf("{%s} shared name %s\n", path, pSharedMemName);
+
+    // use semaphore to protect process of creation shared memory
+    sharedSem = sem_open(pSharedSemName, O_CREAT | O_EXCL, 0666, 0);
+    if (NULL == sharedSem)
+    {
+        sharedSem = sem_open(pSharedSemName, 0);
+        if (NULL == sharedSem)
+        {
+            PROC_ERROR("sem_open() failed");
+            isError = true;
+            goto lExit;  
+        }
+        if (0 > sem_wait(sharedSem))
+        {
+            PROC_ERROR("sem_wait() error");
+            isError = true;
+            goto lExit;  
+        }
+    }
+
+    fdSharedMemory = shm_open(pSharedMemName, 
+                              O_CREAT | O_RDWR | O_EXCL,  
+                              S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH);
+
+    if (0 <= fdSharedMemory)
+    {
+        printf("new shared file!\n");
+    }
+    else
+    {
+        printf("existing shared file!\n");
+        isNewFile = false;
+
+        fdSharedMemory = shm_open(pSharedMemName, 
+                                  O_RDWR, 
+                                  S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH);
+
+        if (0 > fdSharedMemory)
+        {
+            PROC_ERROR("shm_open() failure");
+            isError = true;
+            goto lExit;  
+        }
+    }
+
+    if ((isNewFile) && (0 > ftruncate(fdSharedMemory, sizeof(rl_open_file))))
+    {
+        PROC_ERROR("ftruncate() failure");
+        isError = true;
+        goto lExit;  
+    }
+
+    // map object to memory
+    pRlOpenFile = mmap(0, sizeof(rl_open_file), PROT_READ|PROT_WRITE, MAP_SHARED, fdSharedMemory, 0);
+    if (MAP_FAILED == (void *)pRlOpenFile)
+    {
+        PROC_ERROR("mmap() failure");
+        isError = true;
+        goto lExit;  
+    }
+
+    if (isNewFile) 
+    {
+        memset(pRlOpenFile, 0, sizeof(rl_open_file));
+        initialiserMutex(&pRlOpenFile->mutex);
+        pRlOpenFile->first = NEXT_NULL;
+        for (int i =0; i < NB_LOCKS; i++)
+        {
+            pRlOpenFile->lock_table[i].next_lock = NEXT_NULL;
+        }
+    }
 
     // ============================== register new rl_open_file in rl_all_files ========================================
- 
-    int index = rl_all_files.nb_files;
-    rl_all_files.tab_open_files[index] = stRlOpenFile;
+    rl_all_files.tab_open_files[rl_all_files.nb_files].f    = pRlOpenFile;
+    rl_all_files.tab_open_files[rl_all_files.nb_files].dCnt = 0;
     rl_all_files.nb_files++;
-    
-    // ========================================= make EXIT_SUCCESS =====================================================
 
-    return *stRlDescriptor;
-    
+    pRlOpenFile->refCnt++;
+    printf("RC:%d\n", pRlOpenFile->refCnt);
 
+lExit:
 
-lBadExit:  
-    FREE_MMAP(stRlOpenFile, sizeof(rl_open_file));
+    pthread_mutex_unlock(&rl_all_files.mutex);
+
+    if (isError)
+    {
+        CLOSE_FILE(fdFile);
+        fdFile = FILE_UNK;
+
+        FREE_MMAP(pRlOpenFile, sizeof(rl_open_file));
+
+        if (isNewFile)
+        {
+            shm_unlink(pSharedMemName);
+        }
+    }
+
     CLOSE_FILE(fdSharedMemory);
-    CLOSE_FILE(fdFile);  
-    FREE_MEM(sharedMemName); 
-    return *stRlDescriptor;
+
+    if (sharedSem)
+    {
+        sem_post(sharedSem);
+        sem_close(sharedSem);
+        if ((isError) && (isNewFile))
+        {
+            sem_unlink(pSharedSemName);
+        }
+    }
+
+    stRlDescriptor.d = fdFile;
+    stRlDescriptor.f = pRlOpenFile;
+
+    
+    return stRlDescriptor;
 }
+
 
 int main(int argc, const char *argv[])
 {
@@ -152,8 +186,6 @@ int main(int argc, const char *argv[])
     rl_descriptor rl_fd2 = rl_open(argv[1], O_RDWR, S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH);
 
     printf("fd1 = %d, fd2 = %d\n", rl_fd1.d, rl_fd2.d);
-
-    printf("fd1 = %d, fd2 = %d\n", rl_all_files.tab_open_files[0]->first, rl_all_files.tab_open_files[1]->first);
 
 
     return EXIT_SUCCESS;

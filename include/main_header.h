@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <stdbool.h>
 
 #include <sys/mman.h>       /* for shm_open */
 #include <sys/stat.h>       /* for mode constants */
@@ -19,10 +20,15 @@
 
 /* ==================================== MACRO VARIABLES ============================================================= */
 
-#define NB_OWNERS 20
-#define NB_LOCKS  10
-#define NB_FILES  256
-#define SHARED_MEM_FORMAT "/f_%ld_%ld"
+#define NB_OWNERS           20
+#define NB_LOCKS            10
+#define NB_FILES            256
+#define NB_FD               512
+#define NEXT_NULL           -2
+#define FILE_UNK            -1
+
+#define SHARED_NAME_MAX_LEN 64
+#define SHARED_MEM_FORMAT   "/%c_%ld_%ld"
 
 /* ==================================== MACRO FUNCTIONS ============================================================= */
 
@@ -36,6 +42,7 @@
 
 #define LOCK_ERROR(Code) if (Code != 0) { fprintf(stderr, "%s : error {%d} in file {%s} on line {%d}\n", "mutex_lock() failure", strerror(Code), __FILE__, __LINE__); }
 #define UNLOCK_ERROR(Code) if (Code != 0) { fprintf(stderr, "%s : error {%d} in file {%s} on line {%d}\n", "mutex_unlock() failure", strerror(Code), __FILE__, __LINE__); }
+
 
 /* ======================================= STRUCTURES =============================================================== */
 
@@ -53,16 +60,23 @@ typedef struct
     short           type; 
     size_t          nb_owners;
     owner           lock_owners[NB_OWNERS];
-    pthread_mutex_t mutex;
-    pthread_cond_t  condition;
-    sem_t           semaphore;
 } rl_lock;
 
 typedef struct
 {
     int             first;
     rl_lock         lock_table[NB_LOCKS];
+    pthread_mutex_t mutex;
+    int             refCnt;
 } rl_open_file;
+
+
+typedef struct
+{
+    size_t        dCnt;
+    int           d[NB_FD];
+    rl_open_file *f;
+} rl_file;
 
 typedef struct
 {
@@ -73,5 +87,6 @@ typedef struct
 static struct 
 {
     int             nb_files;
-    rl_open_file   *tab_open_files[NB_FILES];
+    rl_file         tab_open_files[NB_FILES];
+    pthread_mutex_t mutex; //protect multi-threading access for library
 } rl_all_files;

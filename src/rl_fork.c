@@ -1,4 +1,4 @@
-#include "../include/rl_fork.h"
+#include "rl_fork.h"
 
 pid_t rl_fork() {
     pid_t pid;
@@ -9,14 +9,14 @@ pid_t rl_fork() {
         case 0 :
             
             for(int i = 0; i < rl_all_files.nb_files; i++){
-                if(canAddNewOwnerByPid(getppid(), rl_all_files.tab_open_files[i]) == -1) {
+                if(canAddNewOwnerByPid(getppid(), rl_all_files.tab_open_files[i].f) == -1) {
                     // gestion erreur
                     PROC_ERROR("rl_fork() failure NB_OWNERS at max");
                     return -1;
                 }
             }
             for(int i = 0; i < rl_all_files.nb_files; i++){
-                addNewOwnerByPid(getppid(), getpid(), rl_all_files.tab_open_files[i]);
+                addNewOwnerByPid(getppid(), getpid(), rl_all_files.tab_open_files[i].f);
             }
             exit(EXIT_SUCCESS);
         default :

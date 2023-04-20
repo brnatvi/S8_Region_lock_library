@@ -42,6 +42,12 @@ char* getSharedMemoryName(const char *filePath)
     int returnValue = -1;
     struct stat statBuffer;
     
+    if (!name)
+    {
+        PROC_ERROR("malloc() failure");
+        return NULL;
+    }
+
     returnValue = stat(filePath, &statBuffer);
     if (returnValue < 0)
     {
@@ -56,4 +62,3 @@ char* getSharedMemoryName(const char *filePath)
 int ownerEquals(owner o1, owner o2){
     return (o1.des == o2.des) && (o1.proc == o2.proc);
 }
-

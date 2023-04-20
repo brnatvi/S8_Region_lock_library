@@ -80,4 +80,3 @@ int addNewOwner(owner own, owner new_owner, rl_open_file *f){
     }
     return 0;
 }
-

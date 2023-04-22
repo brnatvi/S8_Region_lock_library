@@ -25,7 +25,9 @@
 #define NB_FILES            256
 #define NB_FD               512
 #define NEXT_NULL           -2
+#define NEXT_LAST           -1
 #define FILE_UNK            -1
+#define RES_ERR             -1
 
 #define SHARED_NAME_MAX_LEN 64
 #define SHARED_MEM_FORMAT   "/%c_%ld_%ld"

@@ -134,7 +134,7 @@ rl_descriptor rl_open(const char *path, int oflag, ...)
     rl_all_files.nb_files++;
 
     pRlOpenFile->refCnt++;
-    printf("RC:%d\n", pRlOpenFile->refCnt);
+    printf("RC : %d\n", pRlOpenFile->refCnt);
 
 lExit:
 
@@ -173,6 +173,161 @@ lExit:
 }
 
 
+int rl_close(rl_descriptor lfd)
+{
+    char    pSharedMemName[SHARED_NAME_MAX_LEN];
+    char    pSharedSemName[SHARED_NAME_MAX_LEN];
+    sem_t  *sharedSem      = NULL;
+    bool    isError        = false;
+    bool    isLastRef      = false;
+    pid_t   pidCur         = getpid();
+    int     lockIdx        = NEXT_NULL;
+    bool    isCloseFd      = true;
+
+
+    if ((lfd.d == FILE_UNK) || (!lfd.f))
+    {
+        PROC_ERROR("wrong input");
+        return RES_ERR;
+    }
+
+    if (    (!makeSharedNameByFd(lfd.d, SHARED_PREFIX_MEM, pSharedMemName, SHARED_NAME_MAX_LEN))
+         || (!makeSharedNameByFd(lfd.d, SHARED_PREFIX_SEM, pSharedSemName, SHARED_NAME_MAX_LEN))
+       )
+    {
+        PROC_ERROR("making shared names failure!");
+        isError = true;
+        goto lExit;
+    }
+
+    sharedSem = sem_open(pSharedSemName, 0);
+    if (NULL == sharedSem)
+    {
+        PROC_ERROR("sem_open() failed");
+        isError = true;
+        goto lExit;  
+    }
+    if (0 > sem_wait(sharedSem))
+    {
+        PROC_ERROR("sem_wait() error");
+        isError = true;
+        goto lExit;  
+    }
+
+    pthread_mutex_lock(&lfd.f->mutex);
+
+    printf("looking through locks...\n");
+    lockIdx = lfd.f->first;
+    while (lockIdx >= 0)
+    {
+        for (int i = 0; i < lfd.f->lock_table[lockIdx].nb_owners; i++)
+        {
+            if (    (lfd.f->lock_table[lockIdx].lock_owners[i].proc == pidCur)   //if this proc has lock.s for this fd
+                 && (lfd.f->lock_table[lockIdx].lock_owners[i].des  == lfd.d)
+               )
+            {
+                if ((i+1) < lfd.f->lock_table[lockIdx].nb_owners)
+                {
+                    memmove(&lfd.f->lock_table[lockIdx].lock_owners[i],    // erase him from owners and shift left the rest
+                            &lfd.f->lock_table[lockIdx].lock_owners[i+1],
+                            sizeof(owner) * (lfd.f->lock_table[lockIdx].nb_owners - (i+1)) );
+                    i--;
+                }
+                lfd.f->lock_table[lockIdx].nb_owners--;    
+            }
+        }
+
+        if (!lfd.f->lock_table[lockIdx].nb_owners) //if there is no more owners for lock -> remove lock from lock_table
+        {
+            struct flock fLock;    //remove existed lock
+            fLock.l_len    = lfd.f->lock_table[lockIdx].len;
+            fLock.l_type   = F_UNLCK;
+            fLock.l_start  = lfd.f->lock_table[lockIdx].starting_offset;
+            fLock.l_whence = SEEK_SET;
+            fLock.l_pid    = getpid();
+            fcntl(lfd.d, F_SETLK, &fLock); 
+            
+            int nextLock = lfd.f->lock_table[lockIdx].next_lock;
+            lfd.f->lock_table[lockIdx].next_lock = NEXT_NULL;
+            
+            if (lfd.f->first == lockIdx)
+            {
+                lfd.f->first = nextLock;
+            }
+            lockIdx = nextLock;
+        }
+    }
+
+    //if this process has another fd opened for file we can't close file
+    lockIdx = lfd.f->first;
+    while ((lockIdx >= 0) && (isCloseFd == true))
+    {
+        for (int i = 0; i < lfd.f->lock_table[lockIdx].nb_owners; i++)
+        {
+            if (lfd.f->lock_table[lockIdx].lock_owners[i].proc == pidCur)
+            {
+                isCloseFd = false;
+                break;
+            }
+        }
+    }
+   
+    if (!isCloseFd)
+    {
+        printf("postpone descriptor closing\n");
+
+        pthread_mutex_lock(&rl_all_files.mutex);
+        rl_file *pRlFile = NULL;
+
+        for (int i = 0; i < rl_all_files.nb_files; i++)
+        {
+            pRlFile = &rl_all_files.tab_open_files[i];
+
+            if (pRlFile->f == lfd.f)
+            {
+                pRlFile->d[pRlFile->dCnt] = lfd.d;
+                pRlFile->dCnt++;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&rl_all_files.mutex);
+    }
+
+    printf("<< RC : %d!\n", lfd.f->refCnt);
+
+    lfd.f->refCnt --;
+    if (lfd.f->refCnt <= 0)
+    {
+        isLastRef = true;    
+    }
+
+    pthread_mutex_unlock(&lfd.f->mutex);
+
+lExit:
+    if (isCloseFd)
+    {
+        CLOSE_FILE(lfd.d);
+    }
+
+    if (sharedSem)
+    {
+        sem_post(sharedSem);
+        sem_close(sharedSem);
+        if (isLastRef)
+        {
+            sem_unlink(pSharedSemName);
+        }
+    }
+
+    if (isError) return -1;
+    return 0;
+}
+
+
+
+
+
+
 int main(int argc, const char *argv[])
 {
     if (argc != 2)
@@ -187,6 +342,8 @@ int main(int argc, const char *argv[])
 
     printf("fd1 = %d, fd2 = %d\n", rl_fd1.d, rl_fd2.d);
 
+    rl_close(rl_fd2);
+    rl_close(rl_fd1);
 
     return EXIT_SUCCESS;
 }

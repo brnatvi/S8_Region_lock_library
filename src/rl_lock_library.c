@@ -492,8 +492,14 @@ rl_descriptor rl_dup(rl_descriptor lfd){
         return bad;
     }
     owner own = {.des = lfd.d, .proc = getpid()};
+
+    // lock
+    pthread_mutex_lock(&lfd.f->mutex);
+
     int add = canAddNewOwner(own, lfd.f);
     if(add == -1) {
+        // lever lock
+        pthread_mutex_unlock(&lfd.f->mutex);
         PROC_ERROR("rl_dup() failure NB_OWNERS at max");
         rl_descriptor bad = {.d = -1, .f = NULL};
         return bad;
@@ -502,6 +508,8 @@ rl_descriptor rl_dup(rl_descriptor lfd){
     if(add == 1) {
         addNewOwner(own, new_owner, lfd.f);
     }
+    // unlock
+    pthread_mutex_unlock(&lfd.f->mutex);
     rl_descriptor new_descr = {.d = newd, .f = lfd.f};
     return new_descr;
 }
@@ -514,8 +522,10 @@ rl_descriptor rl_dup2(rl_descriptor lfd, int newd) {
         return bad;
     }
     owner own = {.des = lfd.d, .proc = getpid()};
+    pthread_mutex_lock(&lfd.f->mutex);
     int add = canAddNewOwner(own, lfd.f);
     if(add == -1) {
+        pthread_mutex_unlock(&lfd.f->mutex);
         PROC_ERROR("rl_dup() failure NB_OWNERS at max");
         rl_descriptor bad = {.d = -1, .f = NULL};
         return bad;
@@ -524,6 +534,7 @@ rl_descriptor rl_dup2(rl_descriptor lfd, int newd) {
     if(add == 1) {
         addNewOwner(own, new_owner, lfd.f);
     }
+    pthread_mutex_unlock(&lfd.f->mutex);
     rl_descriptor new_descr = {.d = newd, .f = lfd.f};
     return new_descr;
     
@@ -537,17 +548,30 @@ pid_t rl_fork() {
             PROC_ERROR("fork() failure");
             return -1;
         case 0 :
-            
+            // semaphore
+            pthread_mutex_lock(&rl_all_files.mutex);
             for(int i = 0; i < rl_all_files.nb_files; i++){
+                // lock
+                pthread_mutex_lock(&rl_all_files.tab_open_files[i].f->mutex);
+                // gestion erreur
                 if(canAddNewOwnerByPid(getppid(), rl_all_files.tab_open_files[i].f) == -1) {
-                    // gestion erreur
+                    // lever lock + semaphore
+                    pthread_mutex_unlock(&rl_all_files.tab_open_files[i].f->mutex);
+                    pthread_mutex_unlock(&rl_all_files.mutex);
                     PROC_ERROR("rl_fork() failure NB_OWNERS at max");
                     return -1;
                 }
+                // unlock
+                pthread_mutex_unlock(&rl_all_files.tab_open_files[i].f);
             }
             for(int i = 0; i < rl_all_files.nb_files; i++){
+                // lock
+                pthread_mutex_lock(&rl_all_files.tab_open_files[i].f->mutex);
                 addNewOwnerByPid(getppid(), getpid(), rl_all_files.tab_open_files[i].f);
+                // unlock
+                pthread_mutex_unlock(&rl_all_files.tab_open_files[i].f->mutex);
             }
+            pthread_mutex_unlock(&rl_all_files.mutex);
             exit(EXIT_SUCCESS);
         default :
             if(wait(NULL) == -1) { // necessaire ?
@@ -559,7 +583,26 @@ pid_t rl_fork() {
 
 }
 
+int rl_fcntl(rl_descriptor lfd, int cmd, struct flock *lck) {
+    owner lfd_owner = {.proc = getpid(), .des = lfd};
+    if(cmd == F_SETLK) {
+        if(lck->l_type == F_UNLCK) {
+            // lever verrou au milieu d'un segment => deux segments verrouillés
+            /* TODO : parcourir lfd.f
+            * verifier sur quels endroits sont posés les verrous
+            * si séparation en deux segments verrouillés -> canAddNewOwner + addNewOwner(owner,owner,...)
+            * si owner non dans table => ERREUR
+            */
+            
+        }
+        else if(lck->l_type == F_RDLCK){
 
+        }
+        else if(lck->l_type == F_WRLCK) {
+
+        }
+    }
+}
 
 ////////////////////////////////////         AUXILIARY FONCTIONS       /////////////////////////////////////////////////
 //////////                                                                                                      ////////

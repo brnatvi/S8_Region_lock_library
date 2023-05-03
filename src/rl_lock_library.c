@@ -12,6 +12,16 @@
 #define SHARED_PREFIX_MEM 'f'
 #define SHARED_PREFIX_SEM 's'
 
+//https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_(Select_Graphic_Rendition)_parameters
+#define KNRM                "\x1B[0m\n"
+#define KRED                "\x1B[31m"
+#define KGRN                "\x1B[32m"
+#define KYEL                "\x1B[33m"
+#define KBLU                "\x1B[34m"
+#define KMAG                "\x1B[35m"
+#define KCYN                "\x1B[36m"
+#define KWHT                "\x1B[37m"
+
 
 /* ==================================== MACRO FUNCTIONS ============================================================= */
 
@@ -26,55 +36,48 @@
 #define LOCK_ERROR(Code) if (Code != 0) { fprintf(stderr, "%s : error {%d} in file {%s} on line {%d}\n", "mutex_lock() failure", strerror(Code), __FILE__, __LINE__); }
 #define UNLOCK_ERROR(Code) if (Code != 0) { fprintf(stderr, "%s : error {%d} in file {%s} on line {%d}\n", "mutex_unlock() failure", strerror(Code), __FILE__, __LINE__); }
 
-
-typedef struct
-{
-    size_t        dCnt;
-    int           d[NB_FD];
-    rl_open_file *f;
-} rl_file;
-
 static struct 
 {
     int             nb_files;
-    rl_file         tab_open_files[NB_FILES];
+    rl_open_file   *tab_open_files[NB_FILES];
     pthread_mutex_t mutex; //protect multi-threading access for library
 } rl_all_files;
 
+static bool  g_is_initialized = false;
 
 /* ================================  AUXILIARY FUNCTIONS DEFINITIONS  =============================================== */
 
 //TODO: doc
 // int add_new_owner(rl_descriptor lfd, int newd);
 // 1 si oui, 0 si own non dans table, -1 si capacité max
-int canAddNewOwner(owner own, rl_open_file *f);
+static int can_add_new_owner(owner own, rl_open_file *f);
 
 //TODO: doc
 // assume we can add
-int addNewOwner(owner own, owner new_owner, rl_open_file *f);
+static int add_new_owner(owner own, owner new_owner, rl_open_file *f);
 
 //TODO: doc
 //int add_new_owner();
 // -1 si impossible, 0 sinon
-int canAddNewOwnerByPid(pid_t parent, rl_open_file *f);
+static int can_add_new_owner_by_pid(pid_t parent, rl_open_file *f);
 
 //TODO: doc
 // assume we can add
-int addNewOwnerByPid(pid_t parent, pid_t fils, rl_open_file *f);
+static int add_new_owner_by_pid(pid_t parent, pid_t fils, rl_open_file *f);
 
 /**
  * Initialize a mutex.
  * @param pMutex pointer to mutex
  * @return 0 if succesful, otherwise, an error number shall be returned to indicate the error
  */
-int initialiserMutex(pthread_mutex_t *pMutex);
+static int init_mutex(pthread_mutex_t *pMutex);
 
 /**
  * Initialize a condition variable attributes object.
  * @param pCond pointer to condition
  * @return 0 if succesful, otherwise, an error number shall be returned to indicate the error
  */
-int initialiserCond(pthread_cond_t *pCond);
+static int init_cond(pthread_cond_t *pCond);
 
 /**
  * Test equality between two owners
@@ -82,7 +85,7 @@ int initialiserCond(pthread_cond_t *pCond);
  * @param o2 owener
  * @return true if equals, false otherwise
  */
-bool ownerEquals(owner o1, owner o2);
+static bool is_owners_are_equal(owner o1, owner o2);
 
 /**
  * Compose shared memory object name according format "/f_dev_ino", basing on file's stat information 
@@ -92,7 +95,7 @@ bool ownerEquals(owner o1, owner o2);
  * @param maxLen [in] maximum name length in characters
  * @return true - OK, false - error
  */
-bool makeSharedNameByPath(const char *filePath, char type, char *name, size_t maxLen);
+static bool make_shared_name_by_path(const char *filePath, char type, char *name, size_t maxLen);
 
 /**
  * Compose shared memory object name according format "/f_dev_ino", basing on file's stat information 
@@ -102,22 +105,32 @@ bool makeSharedNameByPath(const char *filePath, char type, char *name, size_t ma
  * @param maxLen [in] maximum name length in characters
  * @return true - OK, false - error
  */
-bool makeSharedNameByFd(int fd, char type, char *name, size_t maxLen);
+static bool make_shared_name_by_fd(int fd, char type, char *name, size_t maxLen);
+
+static void delete_owner(rl_open_file *f, int index, int d);
+
+static void delete_lock(rl_open_file *f, int index);
 
 
 ///////////////////////////////////         RL_LIBRARY FUNCTIONS       /////////////////////////////////////////////////
 //////////                                                                                                      ////////
 
 int rl_init_library() {
+    if (g_is_initialized)
+    {
+        return 0;
+    }
 
     int code = -1;    
-    if ((code = initialiserMutex(&rl_all_files.mutex)) != 0)
+    if ((code = init_mutex(&rl_all_files.mutex)) != 0)
     {
         PROC_ERROR(strerror(code));
         return code;
     }
     rl_all_files.nb_files = 0;
-    memset(rl_all_files.tab_open_files, 0, sizeof(rl_open_file) * NB_FILES);   
+    memset(rl_all_files.tab_open_files, 0, sizeof(rl_open_file*) * NB_FILES);   
+
+    g_is_initialized = true;
 
     return code;
 }
@@ -165,8 +178,8 @@ rl_descriptor rl_open(const char *path, int oflag, ...)
 
    
     // =================== open or create shared memory object =========================================================
-    if (    (!makeSharedNameByPath(path, SHARED_PREFIX_MEM, pSharedMemName, SHARED_NAME_MAX_LEN))
-         || (!makeSharedNameByPath(path, SHARED_PREFIX_SEM, pSharedSemName, SHARED_NAME_MAX_LEN))
+    if (    (!make_shared_name_by_path(path, SHARED_PREFIX_MEM, pSharedMemName, SHARED_NAME_MAX_LEN))
+         || (!make_shared_name_by_path(path, SHARED_PREFIX_SEM, pSharedSemName, SHARED_NAME_MAX_LEN))
        )
     {
         PROC_ERROR("making shared names failure!");
@@ -177,7 +190,7 @@ rl_descriptor rl_open(const char *path, int oflag, ...)
     printf("{%s} shared name %s\n", path, pSharedMemName);
 
     // use semaphore to protect process of creation shared memory
-    sharedSem = sem_open(pSharedSemName, O_CREAT | O_EXCL, 0666, 0);
+    sharedSem = sem_open(pSharedSemName, O_CREAT | O_EXCL, S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH, 0);
     if (NULL == sharedSem)
     {
         sharedSem = sem_open(pSharedSemName, 0);
@@ -201,11 +214,11 @@ rl_descriptor rl_open(const char *path, int oflag, ...)
 
     if (0 <= fdSharedMemory)
     {
-        printf("new shared file!\n");
+        printf("new shared file %s!\n", pSharedMemName);
     }
     else
     {
-        printf("existing shared file!\n");
+        printf("existing shared file %s!\n", pSharedMemName);
         isNewFile = false;
 
         fdSharedMemory = shm_open(pSharedMemName, 
@@ -239,7 +252,11 @@ rl_descriptor rl_open(const char *path, int oflag, ...)
     if (isNewFile) 
     {
         memset(pRlOpenFile, 0, sizeof(rl_open_file));
-        initialiserMutex(&pRlOpenFile->mutex);
+        init_mutex(&pRlOpenFile->mutex);
+
+        init_cond(&pRlOpenFile->cond);
+        pRlOpenFile->blockCnt = 0;
+
         pRlOpenFile->first = NEXT_NULL;
         for (int i =0; i < NB_LOCKS; i++)
         {
@@ -248,12 +265,11 @@ rl_descriptor rl_open(const char *path, int oflag, ...)
     }
 
     // ============================== register new rl_open_file in rl_all_files ========================================
-    rl_all_files.tab_open_files[rl_all_files.nb_files].f    = pRlOpenFile;
-    rl_all_files.tab_open_files[rl_all_files.nb_files].dCnt = 0;
+    rl_all_files.tab_open_files[rl_all_files.nb_files] = pRlOpenFile;
     rl_all_files.nb_files++;
 
     pRlOpenFile->refCnt++;
-    printf("RC : %d\n", pRlOpenFile->refCnt);
+    printf("Open: RC : %d\n", pRlOpenFile->refCnt);
 
 lExit:
 
@@ -265,6 +281,7 @@ lExit:
         fdFile = FILE_UNK;
 
         FREE_MMAP(pRlOpenFile, sizeof(rl_open_file));
+        pRlOpenFile = NULL;
 
         if (isNewFile)
         {
@@ -285,9 +302,7 @@ lExit:
     }
 
     stRlDescriptor.d = fdFile;
-    stRlDescriptor.f = pRlOpenFile;
-
-    
+    stRlDescriptor.f = pRlOpenFile;    
     return stRlDescriptor;
 }
 
@@ -298,11 +313,9 @@ int rl_close(rl_descriptor lfd)
     char    pSharedSemName[SHARED_NAME_MAX_LEN];
     sem_t  *sharedSem      = NULL;
     bool    isError        = false;
+    int     rc             = -1;
     bool    isLastRef      = false;
-    pid_t   pidCur         = getpid();
     int     lockIdx        = NEXT_NULL;
-    bool    isCloseFd      = true;
-
 
     if ((lfd.d == FILE_UNK) || (!lfd.f))
     {
@@ -310,8 +323,8 @@ int rl_close(rl_descriptor lfd)
         return RES_ERR;
     }
 
-    if (    (!makeSharedNameByFd(lfd.d, SHARED_PREFIX_MEM, pSharedMemName, SHARED_NAME_MAX_LEN))
-         || (!makeSharedNameByFd(lfd.d, SHARED_PREFIX_SEM, pSharedSemName, SHARED_NAME_MAX_LEN))
+    if (    (!make_shared_name_by_fd(lfd.d, SHARED_PREFIX_MEM, pSharedMemName, SHARED_NAME_MAX_LEN))
+         || (!make_shared_name_by_fd(lfd.d, SHARED_PREFIX_SEM, pSharedSemName, SHARED_NAME_MAX_LEN))
        )
     {
         PROC_ERROR("making shared names failure!");
@@ -339,96 +352,42 @@ int rl_close(rl_descriptor lfd)
     lockIdx = lfd.f->first;
     while (lockIdx >= 0)
     {
-        for (int i = 0; i < lfd.f->lock_table[lockIdx].nb_owners; i++)
-        {
-            if (    (lfd.f->lock_table[lockIdx].lock_owners[i].proc == pidCur)   //if this proc has lock.s for this fd
-                 && (lfd.f->lock_table[lockIdx].lock_owners[i].des  == lfd.d)
-               )
-            {
-                if ((i+1) < lfd.f->lock_table[lockIdx].nb_owners)
-                {
-                    memmove(&lfd.f->lock_table[lockIdx].lock_owners[i],    // erase him from owners and shift left the rest
-                            &lfd.f->lock_table[lockIdx].lock_owners[i+1],
-                            sizeof(owner) * (lfd.f->lock_table[lockIdx].nb_owners - (i+1)) );
-                    i--;
-                }
-                lfd.f->lock_table[lockIdx].nb_owners--;    
-            }
-        }
-
-        if (!lfd.f->lock_table[lockIdx].nb_owners) //if there is no more owners for lock -> remove lock from lock_table
-        {
-            struct flock fLock;    //remove existed lock
-            fLock.l_len    = lfd.f->lock_table[lockIdx].len;
-            fLock.l_type   = F_UNLCK;
-            fLock.l_start  = lfd.f->lock_table[lockIdx].starting_offset;
-            fLock.l_whence = SEEK_SET;
-            fLock.l_pid    = getpid();
-            fcntl(lfd.d, F_SETLK, &fLock); 
-            
-            int nextLock = lfd.f->lock_table[lockIdx].next_lock;
-            lfd.f->lock_table[lockIdx].next_lock = NEXT_NULL;
-            
-            if (lfd.f->first == lockIdx)
-            {
-                lfd.f->first = nextLock;
-            }
-            lockIdx = nextLock;
-        }
+        int nextLock = lfd.f->lock_table[lockIdx].next_lock;
+        delete_owner(lfd.f, lockIdx, lfd.d);
+        lockIdx = nextLock;
     }
-
-    //if this process has another fd opened for file we can't close file
-    lockIdx = lfd.f->first;
-    while ((lockIdx >= 0) && (isCloseFd == true))
-    {
-        for (int i = 0; i < lfd.f->lock_table[lockIdx].nb_owners; i++)
-        {
-            if (lfd.f->lock_table[lockIdx].lock_owners[i].proc == pidCur)
-            {
-                isCloseFd = false;
-                break;
-            }
-        }
-    }
-   
-    if (!isCloseFd)
-    {
-        printf("postpone descriptor closing\n");
-
-        pthread_mutex_lock(&rl_all_files.mutex);
-        rl_file *pRlFile = NULL;                                    //AZH I've change code here
-
-        for (int i = 0; i < rl_all_files.nb_files; i++)
-        {
-            pRlFile = &rl_all_files.tab_open_files[i];              //AZH I've change code here
-
-            if (pRlFile->f == lfd.f)
-            {
-                pRlFile->d[pRlFile->dCnt] = lfd.d;
-                pRlFile->dCnt++;
-                break;
-            }
-        }
-        pthread_mutex_unlock(&rl_all_files.mutex);
-    }
-
-    printf("<< RC : %d!\n", lfd.f->refCnt);
 
     lfd.f->refCnt --;
+    printf("Close: RC : %d!\n", lfd.f->refCnt);
     if (lfd.f->refCnt <= 0)
     {
         isLastRef = true;    
     }
 
+    rc = lfd.f->refCnt;
+
+    for (int i = 0; i < rl_all_files.nb_files; i++)    
+    {
+        if (lfd.f == rl_all_files.tab_open_files[i])
+        {
+            if ((i+1) < rl_all_files.nb_files)
+            {
+                memmove(&rl_all_files.tab_open_files[i],    // erase open file from array by shifting all next ones
+                        &rl_all_files.tab_open_files[i+1],
+                        sizeof(rl_open_file*) * (rl_all_files.nb_files - (i+1)) );
+                i--;
+            }
+            rl_all_files.nb_files--;    
+            break;
+        }
+    }
+
     pthread_mutex_unlock(&lfd.f->mutex);
 
 lExit:
-    if (isCloseFd)
-    {
-        CLOSE_FILE(lfd.d);
-    }
+    CLOSE_FILE(lfd.d);
 
-if (isLastRef)
+    if (isLastRef)
     {
         printf("last ref!\n");
 
@@ -437,29 +396,7 @@ if (isLastRef)
             PROC_ERROR("Last reference deleted, but file locks aren't deleted!");
         }
 
-        pthread_mutex_lock(&rl_all_files.mutex);
-        for (int i = 0; i < rl_all_files.nb_files; i++)
-        {
-            if (rl_all_files.tab_open_files[i].f == lfd.f)
-            {
-                for (int j = 0; j < rl_all_files.tab_open_files[i].dCnt; j++)
-                {
-                    CLOSE_FILE(rl_all_files.tab_open_files[i].d[j]);
-                }
-
-                if ((i+1) < rl_all_files.nb_files)
-                {
-                    memmove(&rl_all_files.tab_open_files[i],
-                            &rl_all_files.tab_open_files[i+1],
-                            sizeof(rl_file) * (rl_all_files.nb_files - (i+1)) );
-                }
-                rl_all_files.nb_files--;    
-                break;
-            }
-        }
-        pthread_mutex_unlock(&rl_all_files.mutex);
-
-
+        pthread_cond_destroy(&lfd.f->cond);
         pthread_mutex_destroy(&lfd.f->mutex);
         FREE_MMAP(lfd.f, sizeof(rl_open_file));
         shm_unlink(pSharedMemName);
@@ -476,100 +413,149 @@ if (isLastRef)
         }
     }
 
-    return isError ? -1 : 0;
+    return isError ? -1 : rc;
 }
 
 //==============================================================================================================
 
-
 rl_descriptor rl_dup(rl_descriptor lfd){
-    int newd = dup(lfd.d);
+    rl_descriptor ret       = {.d   = -1,    .f    = NULL    };
+    owner         new_owner = {.des = -1,    .proc = getpid()};
+    owner         own       = {.des = lfd.d, .proc = getpid()};
 
-    // Gestion erreur
-    if(newd == -1) {
-        PROC_ERROR("dup() failure"); // no close of newd (ref man dup)
-        rl_descriptor bad = {.d = -1, .f = NULL};
-        return bad;
+    if ((lfd.d == FILE_UNK) || (!lfd.f))
+    {
+        PROC_ERROR("wrong input");
+        return ret;
     }
-    owner own = {.des = lfd.d, .proc = getpid()};
 
-    // lock
     pthread_mutex_lock(&lfd.f->mutex);
 
-    int add = canAddNewOwner(own, lfd.f);
-    if(add == -1) {
-        // lever lock
-        pthread_mutex_unlock(&lfd.f->mutex);
+    if (NB_FILES <= rl_all_files.nb_files)
+    {
+        PROC_ERROR("Unable to proceed rl_open because the library's limit on the number of open files (NB_FILES) has been reached");
+        goto lExit;
+    }
+
+    // Gestion erreur
+    int add = can_add_new_owner(own, lfd.f);
+    if(add == -1) 
+    {
         PROC_ERROR("rl_dup() failure NB_OWNERS at max");
-        rl_descriptor bad = {.d = -1, .f = NULL};
-        return bad;
+        goto lExit;
     }
-    owner new_owner = {.des = newd, .proc = getpid()};
-    if(add == 1) {
-        addNewOwner(own, new_owner, lfd.f);
+
+    new_owner.des = dup(lfd.d);
+    if(new_owner.des == -1) 
+    {
+        PROC_ERROR("dup() failure"); // no close of newd (ref man dup)
+        goto lExit;
     }
-    // unlock
+
+    if(add == 1) 
+    {
+        add_new_owner(own, new_owner, lfd.f);
+    }
+
+    ret.d = new_owner.des;
+    ret.f = lfd.f;
+    lfd.f->refCnt++;
+    rl_all_files.tab_open_files[rl_all_files.nb_files] = lfd.f;
+    rl_all_files.nb_files++;
+    
+    printf("Dup: RC : %d Fd:%d\n", lfd.f->refCnt, new_owner.des);
+
+lExit:    
     pthread_mutex_unlock(&lfd.f->mutex);
-    rl_descriptor new_descr = {.d = newd, .f = lfd.f};
-    return new_descr;
+
+    return ret;
 }
 
 
 rl_descriptor rl_dup2(rl_descriptor lfd, int newd) {
-    if(dup2(lfd.d, newd) == -1) {
-        PROC_ERROR("dup2() failure"); // no close of newd
-        rl_descriptor bad = {.d = -1, .f = NULL};
-        return bad;
-    }
-    owner own = {.des = lfd.d, .proc = getpid()};
-    pthread_mutex_lock(&lfd.f->mutex);
-    int add = canAddNewOwner(own, lfd.f);
-    if(add == -1) {
-        pthread_mutex_unlock(&lfd.f->mutex);
-        PROC_ERROR("rl_dup() failure NB_OWNERS at max");
-        rl_descriptor bad = {.d = -1, .f = NULL};
-        return bad;
-    }
-    owner new_owner = {.des = newd, .proc = getpid()};
-    if(add == 1) {
-        addNewOwner(own, new_owner, lfd.f);
-    }
-    pthread_mutex_unlock(&lfd.f->mutex);
-    rl_descriptor new_descr = {.d = newd, .f = lfd.f};
-    return new_descr;
+    rl_descriptor ret       = {.d   = -1,    .f    = NULL    };
+    owner         new_owner = {.des = newd,  .proc = getpid()};
+    owner         own       = {.des = lfd.d, .proc = getpid()};
     
+    if ((lfd.d == FILE_UNK) || (!lfd.f))
+    {
+        PROC_ERROR("wrong input");
+        return ret;
+    }
+
+    pthread_mutex_lock(&lfd.f->mutex);
+
+    if (NB_FILES <= rl_all_files.nb_files)
+    {
+        PROC_ERROR("Unable to proceed rl_open because the library's limit on the number of open files (NB_FILES) has been reached");
+        goto lExit;
+    }
+
+    // Gestion erreur
+    int add = can_add_new_owner(own, lfd.f);
+    if(add == -1) 
+    {
+        PROC_ERROR("rl_dup() failure NB_OWNERS at max");
+        goto lExit;
+    }
+
+    if(dup2(lfd.d, newd) == -1) 
+    {
+        PROC_ERROR("dup() failure"); // no close of newd (ref man dup)
+        goto lExit;
+    }
+
+    if(add == 1) 
+    {
+        add_new_owner(own, new_owner, lfd.f);
+    }
+
+    ret.d = new_owner.des;
+    ret.f = lfd.f;
+    lfd.f->refCnt++;
+
+    rl_all_files.tab_open_files[rl_all_files.nb_files] = lfd.f;
+    rl_all_files.nb_files++;
+
+    printf("Dup2: RC : %d\n", lfd.f->refCnt);
+
+lExit:    
+    pthread_mutex_unlock(&lfd.f->mutex);
+
+    return ret;
 }
 
-
+/*
 pid_t rl_fork() {
+    
     pid_t pid;
     switch(pid = fork()) {
         case -1 :
             PROC_ERROR("fork() failure");
             return -1;
         case 0 :
-            // semaphore
+            // semaphore            
             pthread_mutex_lock(&rl_all_files.mutex);
             for(int i = 0; i < rl_all_files.nb_files; i++){
                 // lock
-                pthread_mutex_lock(&rl_all_files.tab_open_files[i].f->mutex);
+                pthread_mutex_lock(&rl_all_files.tab_open_files[i]->mutex);
                 // gestion erreur
-                if(canAddNewOwnerByPid(getppid(), rl_all_files.tab_open_files[i].f) == -1) {
+                if(can_add_new_owner_by_pid(getppid(), rl_all_files.tab_open_files[i]) == -1) {
                     // lever lock + semaphore
-                    pthread_mutex_unlock(&rl_all_files.tab_open_files[i].f->mutex);
+                    pthread_mutex_unlock(&rl_all_files.tab_open_files[i]->mutex);
                     pthread_mutex_unlock(&rl_all_files.mutex);
                     PROC_ERROR("rl_fork() failure NB_OWNERS at max");
                     return -1;
                 }
                 // unlock
-                pthread_mutex_unlock(&rl_all_files.tab_open_files[i].f);
+                pthread_mutex_unlock(&rl_all_files.tab_open_files[i]->mutex);
             }
             for(int i = 0; i < rl_all_files.nb_files; i++){
                 // lock
-                pthread_mutex_lock(&rl_all_files.tab_open_files[i].f->mutex);
-                addNewOwnerByPid(getppid(), getpid(), rl_all_files.tab_open_files[i].f);
+                pthread_mutex_lock(&rl_all_files.tab_open_files[i]->mutex);
+                add_new_owner_by_pid(getppid(), getpid(), rl_all_files.tab_open_files[i]);
                 // unlock
-                pthread_mutex_unlock(&rl_all_files.tab_open_files[i].f->mutex);
+                pthread_mutex_unlock(&rl_all_files.tab_open_files[i]->mutex);
             }
             pthread_mutex_unlock(&rl_all_files.mutex);
             exit(EXIT_SUCCESS);
@@ -580,17 +566,49 @@ pid_t rl_fork() {
             }
             return pid;
     }
-
 }
 
+*/
+
+pid_t rl_fork() 
+{
+    for(int i = 0; i < rl_all_files.nb_files; i++)
+    {
+        pthread_mutex_lock(&rl_all_files.tab_open_files[i]->mutex);
+        if(can_add_new_owner_by_pid(getppid(), rl_all_files.tab_open_files[i]) == -1) 
+        {
+            pthread_mutex_unlock(&rl_all_files.tab_open_files[i]->mutex);
+            PROC_ERROR("rl_fork() failure NB_OWNERS at max");
+            return -1;
+        }
+        pthread_mutex_unlock(&rl_all_files.tab_open_files[i]->mutex);
+    }
+
+    pid_t pid;
+    switch(pid = fork()) 
+    {
+        case 0 :
+            for(int i = 0; i < rl_all_files.nb_files; i++)
+            {
+                pthread_mutex_lock(&rl_all_files.tab_open_files[i]->mutex);
+                add_new_owner_by_pid(getppid(), getpid(), rl_all_files.tab_open_files[i]);
+                rl_all_files.tab_open_files[i]->refCnt++;
+                printf("[%d] Fork: RC : %d\n", getpid(), rl_all_files.tab_open_files[i]->refCnt);
+                pthread_mutex_unlock(&rl_all_files.tab_open_files[i]->mutex);
+            }
+    }
+    return pid;
+}
+
+
 int rl_fcntl(rl_descriptor lfd, int cmd, struct flock *lck) {
-    owner lfd_owner = {.proc = getpid(), .des = lfd};
+    owner lfd_owner = {.proc = getpid(), .des = lfd.d};
     if(cmd == F_SETLK) {
         if(lck->l_type == F_UNLCK) {
             // lever verrou au milieu d'un segment => deux segments verrouillés
             /* TODO : parcourir lfd.f
             * verifier sur quels endroits sont posés les verrous
-            * si séparation en deux segments verrouillés -> canAddNewOwner + addNewOwner(owner,owner,...)
+            * si séparation en deux segments verrouillés -> can_add_new_owner + add_new_owner(owner,owner,...)
             * si owner non dans table => ERREUR
             */
             
@@ -602,12 +620,44 @@ int rl_fcntl(rl_descriptor lfd, int cmd, struct flock *lck) {
 
         }
     }
+    return 0;
+}
+
+
+void rl_print(rl_descriptor lfd)
+{
+    if ((lfd.d == -1) || (!lfd.f))
+    {
+        PROC_ERROR("wrong input");
+        return;
+    }
+
+    printf(KRED "> RL d:%d, references %d" KNRM, lfd.d, lfd.f->refCnt);
+    
+    int lockIdx = lfd.f->first;
+    while (lockIdx >= 0)
+    {
+        printf(KGRN " > Lock [%ld..%ld], %s, owners %zu" KNRM, 
+               lfd.f->lock_table[lockIdx].starting_offset,
+               lfd.f->lock_table[lockIdx].starting_offset + lfd.f->lock_table[lockIdx].len - 1,
+               lfd.f->lock_table[lockIdx].type == F_RDLCK ? "RD" : "WR",
+               lfd.f->lock_table[lockIdx].nb_owners
+              );
+        for (size_t i = 0; i < lfd.f->lock_table[lockIdx].nb_owners; i++)
+        {
+            printf(KBLU "   > Owner %d:%d" KNRM, 
+                lfd.f->lock_table[lockIdx].lock_owners[i].des,
+                lfd.f->lock_table[lockIdx].lock_owners[i].proc);
+        }
+        lockIdx = lfd.f->lock_table[lockIdx].next_lock;
+    }
+    printf(KNRM);
 }
 
 ////////////////////////////////////         AUXILIARY FONCTIONS       /////////////////////////////////////////////////
 //////////                                                                                                      ////////
 
-int initialiserMutex(pthread_mutex_t *pMutex)
+static int init_mutex(pthread_mutex_t *pMutex)
 {
     pthread_mutexattr_t mutexAttr;
     int code = pthread_mutexattr_init(&mutexAttr);
@@ -625,7 +675,7 @@ int initialiserMutex(pthread_mutex_t *pMutex)
 }
 
 
-int initialiserCond(pthread_cond_t *pCond)
+static int init_cond(pthread_cond_t *pCond)
 {
     pthread_condattr_t condAttr;
     int code;
@@ -645,7 +695,7 @@ int initialiserCond(pthread_cond_t *pCond)
 }
 
 
-bool makeSharedNameByPath(const char *filePath, char type, char *name, size_t maxLen)
+static bool make_shared_name_by_path(const char *filePath, char type, char *name, size_t maxLen)
 {        
     int returnValue = -1;
     struct stat statBuffer;
@@ -672,7 +722,7 @@ bool makeSharedNameByPath(const char *filePath, char type, char *name, size_t ma
 }
 
 
-bool makeSharedNameByFd(int fd, char type, char *name, size_t maxLen)
+static bool make_shared_name_by_fd(int fd, char type, char *name, size_t maxLen)
 {
     int returnValue = -1;
     struct stat statBuffer;
@@ -699,38 +749,62 @@ bool makeSharedNameByFd(int fd, char type, char *name, size_t maxLen)
 }
 
 
-bool ownerEquals(owner o1, owner o2){
+static bool is_owners_are_equal(owner o1, owner o2){
     return ((o1.des == o2.des) && (o1.proc == o2.proc));
 }
 
 
-int canAddNewOwner(owner own, rl_open_file *f){
+static int can_add_new_owner(owner own, rl_open_file *f){
     int ind = f->first;
-    int present = 0; // boolean
-    while(ind != -1) {
+    int res = 0;
+    //ind can be NEXT_NULL(-2) or NEXT_LAST(-1)
+    while(ind >= 0) { 
         for(size_t i = 0; i < f->lock_table[ind].nb_owners; i++){
-            if(ownerEquals(f->lock_table[ind].lock_owners[i], own)
-            && f->lock_table[ind].nb_owners == NB_OWNERS) { 
-                return -1;
-            }
-            if(ownerEquals(f->lock_table[ind].lock_owners[i], own)) {
-                present = 1;
+            if(is_owners_are_equal(f->lock_table[ind].lock_owners[i], own)) {
+                if (f->lock_table[ind].nb_owners >= NB_OWNERS) { 
+                    return -1; 
+                }
+                res = 1;
             }
         }
         ind = f->lock_table[ind].next_lock;
     }
-    return present;
+    return res;
+}
+
+bool has_owner(rl_lock *l, owner *o)
+{
+    for(size_t i = 0; i < l->nb_owners; i++)
+    {
+        if(is_owners_are_equal(l->lock_owners[i], *o))
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 
-int addNewOwner(owner own, owner new_owner, rl_open_file *f){
+
+static int add_new_owner(owner own, owner new_owner, rl_open_file *f)
+{
     int ind = f->first;
-    while(ind != -1) {
-        int tmp = (int) f->lock_table[ind].nb_owners;
-        for(size_t i = 0; i < f->lock_table[ind].nb_owners; i++){
-            if(ownerEquals(f->lock_table[ind].lock_owners[i], own)){
-                f->lock_table[ind].lock_owners[tmp] = new_owner;
-                f->lock_table[ind].nb_owners ++;
+    //ind can be NEXT_NULL(-2) or NEXT_LAST(-1)
+    while(ind >= 0) 
+    {
+        if (f->lock_table[ind].type == F_RDLCK)
+        {
+            for(size_t i = 0; i < f->lock_table[ind].nb_owners; i++)
+            {
+                if(is_owners_are_equal(f->lock_table[ind].lock_owners[i], own))
+                {
+                    if (!has_owner(&f->lock_table[ind], &new_owner))
+                    {
+                        f->lock_table[ind].lock_owners[f->lock_table[ind].nb_owners] = new_owner;
+                        f->lock_table[ind].nb_owners ++;
+                    }
+                }
             }
         }
         ind = f->lock_table[ind].next_lock;
@@ -738,16 +812,17 @@ int addNewOwner(owner own, owner new_owner, rl_open_file *f){
     return 0;
 }
 
-
-int canAddNewOwnerByPid(pid_t parent, rl_open_file *f){
+static int can_add_new_owner_by_pid(pid_t parent, rl_open_file *f)
+{
     int ind = f->first;
     
     // loop through lock_table
-    while(ind != -1){ 
+    //ind can be NEXT_NULL(-2) or NEXT_LAST(-1)
+    while(ind >= 0){ 
         // loop through lock_owners
         for(size_t i = 0; i < f->lock_table[ind].nb_owners; i++){
             if(f->lock_table[ind].lock_owners[i].proc == parent 
-            && f->lock_table[ind].nb_owners == NB_OWNERS) {
+            && f->lock_table[ind].nb_owners >= NB_OWNERS) {
                 return -1;
             }
             
@@ -758,19 +833,93 @@ int canAddNewOwnerByPid(pid_t parent, rl_open_file *f){
 }
 
 
-int addNewOwnerByPid(pid_t parent, pid_t fils, rl_open_file *f){
+static int add_new_owner_by_pid(pid_t parent, pid_t fils, rl_open_file *f){
     int ind = f->first;
-    while(ind != -1){
-        int tmp = (int) f->lock_table[ind].nb_owners;
-        for(size_t i = 0; i < f->lock_table[ind].nb_owners; i++){
-            if(f->lock_table[ind].lock_owners[i].proc == parent){
-                owner new_owner = {.des = f->lock_table[ind].lock_owners[i].des,
-                .proc = fils};
-                f->lock_table[ind].lock_owners[tmp] = new_owner;
-                f->lock_table[ind].nb_owners ++;
+    int res = 0;
+    while(ind >= 0)
+    {
+        if (f->lock_table[ind].type == F_RDLCK)
+        {
+            for(size_t i = 0; i < f->lock_table[ind].nb_owners; i++)
+            {
+                if(f->lock_table[ind].lock_owners[i].proc == parent)
+                {
+                    if (f->lock_table[ind].nb_owners < NB_OWNERS) 
+                    {
+                        owner new_owner = {.des = f->lock_table[ind].lock_owners[i].des, .proc = fils};
+
+                        if (!has_owner(&f->lock_table[ind], &new_owner))
+                        {
+                            f->lock_table[ind].lock_owners[f->lock_table[ind].nb_owners] = new_owner;
+                            f->lock_table[ind].nb_owners ++;
+                        }
+                    }
+                    else 
+                    {
+                        PROC_ERROR("add_new_owner_by_pid() failure NB_OWNERS at max");
+                        res = -1;
+                    }
+                }
             }
         }
         ind = f->lock_table[ind].next_lock;
     }
-    return 0;
+    return res;
 }
+
+static void delete_owner(rl_open_file *f, int index, int d)
+{
+    for (int i = 0; i < f->lock_table[index].nb_owners; i++)
+    {
+        if (    (f->lock_table[index].lock_owners[i].proc == getpid())   //if this proc has lock.s for this fd
+             && (f->lock_table[index].lock_owners[i].des  == d)
+           )
+        {
+            if ((i+1) < f->lock_table[index].nb_owners)
+            {
+                memmove(&f->lock_table[index].lock_owners[i],    // erase him from owners and shift left the rest
+                        &f->lock_table[index].lock_owners[i+1],
+                        sizeof(owner) * (f->lock_table[index].nb_owners - (i+1)) );
+                i--;
+            }
+            f->lock_table[index].nb_owners--;    
+        }
+    }
+
+    if (!f->lock_table[index].nb_owners)
+    {
+        delete_lock(f, index);
+    }
+}
+
+static void delete_lock(rl_open_file *f, int index)
+{
+    int prevIdx = NEXT_NULL;
+    int lockIdx = f->first;
+    while (lockIdx >= 0)
+    {
+        if (index == lockIdx)
+        {
+            if (prevIdx != NEXT_NULL)
+            {
+                f->lock_table[prevIdx].next_lock = f->lock_table[lockIdx].next_lock;
+            }
+            else 
+            {
+                f->first = f->lock_table[lockIdx].next_lock;    
+            }
+
+            f->lock_table[lockIdx].nb_owners       = 0;
+            f->lock_table[lockIdx].next_lock       = NEXT_NULL;
+            f->lock_table[lockIdx].len             = 0;
+            f->lock_table[lockIdx].starting_offset = 0;
+            f->lock_table[lockIdx].type            = 0;
+            return;
+        }
+
+        prevIdx = lockIdx;
+        lockIdx = f->lock_table[lockIdx].next_lock;    
+    }
+}
+
+

@@ -33,7 +33,7 @@ typedef struct
     int             next_lock;
     off_t           starting_offset;
     off_t           len;
-    short           type; 
+    short           type;   //F_RDLCK or F_WRLCK
     size_t          nb_owners;
     owner           lock_owners[NB_OWNERS];
 } rl_lock;
@@ -43,6 +43,8 @@ typedef struct
     int             first;
     rl_lock         lock_table[NB_LOCKS];
     pthread_mutex_t mutex;
+    pthread_cond_t  cond;
+    int             blockCnt;
     int             refCnt;
 } rl_open_file;
 
@@ -52,7 +54,6 @@ typedef struct
     int             d;
     rl_open_file    *f;
 } rl_descriptor;
-
 
 ///////////////////////////////////         RL_LIBRARY FUNCTIONS       /////////////////////////////////////////////////
 //////////                                                                                                      ////////
@@ -90,3 +91,12 @@ rl_descriptor rl_dup2(rl_descriptor lfd, int newd);
 
 //TODO: doc
 pid_t rl_fork();
+
+//TODO: doc
+int rl_fcntl(rl_descriptor lfd, int cmd, struct flock *lck);
+
+/**
+ * print internal structures
+ * @param lfd file descriptor
+ */
+void rl_print(rl_descriptor lfd);

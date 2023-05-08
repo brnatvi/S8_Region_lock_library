@@ -1,4 +1,5 @@
 #include "rl_lock_library.h"
+#include <stdint.h>
 
 #define NB_FILES            256
 #define NB_FD               512
@@ -22,6 +23,14 @@
 #define KCYN                "\x1B[36m"
 #define KWHT                "\x1B[37m"
 
+
+#if !defined(MIN)
+    #define MIN(x, y) x < y ? x: y
+#endif    
+
+#if !defined(MAX)
+    #define MAX(x, y) x > y ? x: y
+#endif    
 
 /* ==================================== MACRO FUNCTIONS ============================================================= */
 
@@ -107,9 +116,39 @@ static bool make_shared_name_by_path(const char *filePath, char type, char *name
  */
 static bool make_shared_name_by_fd(int fd, char type, char *name, size_t maxLen);
 
-static void delete_owner(rl_open_file *f, int index, int d);
+static uint64_t get_file_size(int fd);
+
+static uint64_t get_current_position(int fd);
+
+static void rl_clear_dead_owners(rl_descriptor lfd);
 
 static void delete_lock(rl_open_file *f, int index);
+
+static void delete_owner(rl_open_file *f, int index, int d);
+
+static int delete_lock_region(rl_descriptor lfd, struct flock *lck);
+
+static int add_write_lock_region(rl_descriptor lfd, struct flock *lck);
+
+static int add_read_lock_region(rl_descriptor lfd, struct flock *lck);
+
+static int add_lock(rl_open_file *f, struct flock *lck, int d, int type);
+
+static int add_owner(rl_descriptor lfd, rl_lock *lck);
+
+static bool is_rl_compatible(rl_descriptor lfd, struct flock *lck);
+
+static bool is_other_owner(int d, rl_lock *lck);
+
+static bool is_owner(int d, rl_lock *lck);
+
+static bool is_region_equal(off_t offset, off_t len, rl_lock *lck);
+
+static bool is_region_intersection_or_neighbour(off_t offset, off_t len, rl_lock *lck);
+
+static bool is_region_intersection(off_t offset, off_t len, rl_lock *lck);
+
+bool has_owner(rl_lock *l, owner *o);
 
 
 ///////////////////////////////////         RL_LIBRARY FUNCTIONS       /////////////////////////////////////////////////
@@ -600,17 +639,17 @@ pid_t rl_fork()
     return pid;
 }
 
-
+/*
 int rl_fcntl(rl_descriptor lfd, int cmd, struct flock *lck) {
     owner lfd_owner = {.proc = getpid(), .des = lfd.d};
     if(cmd == F_SETLK) {
         if(lck->l_type == F_UNLCK) {
             // lever verrou au milieu d'un segment => deux segments verrouillés
-            /* TODO : parcourir lfd.f
-            * verifier sur quels endroits sont posés les verrous
-            * si séparation en deux segments verrouillés -> can_add_new_owner + add_new_owner(owner,owner,...)
-            * si owner non dans table => ERREUR
-            */
+            // TODO : parcourir lfd.f
+            // verifier sur quels endroits sont posés les verrous
+            // si séparation en deux segments verrouillés -> can_add_new_owner + add_new_owner(owner,owner,...)
+            // si owner non dans table => ERREUR
+            
             
         }
         else if(lck->l_type == F_RDLCK){
@@ -621,6 +660,93 @@ int rl_fcntl(rl_descriptor lfd, int cmd, struct flock *lck) {
         }
     }
     return 0;
+}
+*/
+int rl_fcntl(rl_descriptor lfd, int cmd, struct flock *lck)
+{
+    if ((lfd.d == FILE_UNK) || (!lfd.f) || (F_GETLK == cmd) || (!lck))
+    {
+        PROC_ERROR("wrong input");
+        return -1;
+    }
+
+    struct flock lc         = *lck;
+    int          ret        = 0;
+    bool         isBlocking = (F_SETLKW == cmd);
+
+    //align start & len to make common way
+    if (lc.l_whence == SEEK_CUR)      { lc.l_start = (__off_t)get_current_position(lfd.d) + lc.l_start;  }
+    else if (lc.l_whence == SEEK_END) { lc.l_start = (__off_t)get_file_size(lfd.d) + lc.l_start;         }
+    if (lc.l_len == 0)                { lc.l_len   = (__off_t)get_file_size(lfd.d) - lc.l_start;         }
+    if (lc.l_len < 0)                 { lc.l_start += lc.l_len; lc.l_len = -lc.l_len;                  }
+    
+    lc.l_pid = getpid();
+    lc.l_whence = SEEK_SET; 
+
+    pthread_mutex_lock(&lfd.f->mutex);
+
+    rl_clear_dead_owners(lfd);
+
+
+    if (lc.l_type == F_UNLCK)
+    {
+        ret = delete_lock_region(lfd, &lc);
+
+        //if any process is waiting -> unblock
+        if (lfd.f->blockCnt)
+        {
+            printf("!!!SIGNALLED!!!\n");
+
+            //clear block counter and notify all
+            lfd.f->blockCnt = 0;
+            pthread_cond_broadcast(&lfd.f->cond);
+        }
+    }
+    else
+    {
+        if (isBlocking)
+        {
+            while (1)
+            {
+                if (!is_rl_compatible(lfd, &lc))
+                {
+                    printf("!!!BLOCKED!!!\n");                    
+                    lfd.f->blockCnt ++;                    
+                    pthread_cond_wait(&lfd.f->cond, &lfd.f->mutex);
+                }
+                else
+                {
+                    printf("!!!UNBLOCKED!!!\n");
+                    break;
+                }
+            }
+        }
+        else
+        {
+            if (!is_rl_compatible(lfd, &lc))
+            {
+                ret = -1;
+                PROC_ERROR("Lock isn't compatible");
+                errno = EAGAIN;
+                goto lExit;
+            }
+        }
+
+        if (lc.l_type == F_RDLCK)
+        {
+            ret = add_read_lock_region(lfd, &lc);
+        }
+        else if (lc.l_type == F_WRLCK)
+        {
+            ret = add_write_lock_region(lfd, &lc);
+        }
+    }
+
+
+lExit:    
+    pthread_mutex_unlock(&lfd.f->mutex);
+
+    return ret;
 }
 
 
@@ -832,7 +958,6 @@ static int can_add_new_owner_by_pid(pid_t parent, rl_open_file *f)
     return 0;
 }
 
-
 static int add_new_owner_by_pid(pid_t parent, pid_t fils, rl_open_file *f){
     int ind = f->first;
     int res = 0;
@@ -922,4 +1047,345 @@ static void delete_lock(rl_open_file *f, int index)
     }
 }
 
+
+
+static uint64_t get_file_size(int fd)
+{
+    struct stat l_sStat;
+    l_sStat.st_size = 0;
+    if (0 == fstat(fd, &l_sStat))
+    {
+        return (uint64_t)l_sStat.st_size;
+    }
+
+    return 0;
+}
+
+static uint64_t get_current_position(int fd)
+{
+    return (uint64_t)lseek(fd, 0, SEEK_CUR);    
+}
+
+static bool is_region_intersection(off_t offset, off_t len, rl_lock *lck)
+{
+    if ((offset >= lck->starting_offset) && (offset < (lck->starting_offset + lck->len))) return true;
+    if (((offset + len) > lck->starting_offset) && ((offset + len) <= (lck->starting_offset + lck->len))) return true;
+    if ((offset <= lck->starting_offset) && ((offset + len) >= (lck->starting_offset + lck->len))) return true;
+
+    return false;
+}
+
+static bool is_region_intersection_or_neighbour(off_t offset, off_t len, rl_lock *lck)
+{
+    if ((offset >= lck->starting_offset) && (offset <= (lck->starting_offset + lck->len))) return true;
+    if (((offset + len) >= lck->starting_offset) && ((offset + len) <= (lck->starting_offset + lck->len))) return true;
+    if ((offset <= lck->starting_offset) && ((offset + len) >= (lck->starting_offset + lck->len))) return true;
+
+    return false;
+}
+
+static bool is_region_equal(off_t offset, off_t len, rl_lock *lck)
+{
+    return (offset == lck->starting_offset) && (len == lck->len);
+}
+
+static bool is_rl_compatible(rl_descriptor lfd, struct flock *lck)
+{
+    int lockIdx = lfd.f->first;
+    while (lockIdx >= 0)
+    {
+        if (    (is_region_intersection(lck->l_start, lck->l_len, &lfd.f->lock_table[lockIdx]))
+             && (is_other_owner(lfd.d, &lfd.f->lock_table[lockIdx]))
+           )
+        {
+            if (lck->l_type == F_WRLCK)    
+            {
+                return false;
+            }
+            if ((lck->l_type == F_RDLCK) && (lfd.f->lock_table[lockIdx].type == F_WRLCK))
+            {
+                return false;
+            }
+        }
+
+        lockIdx = lfd.f->lock_table[lockIdx].next_lock;    
+    }
+
+    return true;
+}
+
+
+static bool is_owner(int d, rl_lock *lck)
+{
+    pid_t curPid = getpid();
+    for (size_t szI = 0; szI < lck->nb_owners; szI ++)    
+    {
+        if ((lck->lock_owners[szI].des == d) && (lck->lock_owners[szI].proc == curPid)) return true;
+    }
+
+    return false;
+}
+
+static bool is_other_owner(int d, rl_lock *lck)
+{
+    pid_t curPid = getpid();
+    for (size_t szI = 0; szI < lck->nb_owners; szI ++)    
+    {
+        if ((lck->lock_owners[szI].des != d) || (lck->lock_owners[szI].proc != curPid)) return true;
+    }
+
+    return false;
+}
+
+static void rl_clear_dead_owners(rl_descriptor lfd)
+{
+    int lockIdx = lfd.f->first;
+    while (lockIdx >= 0)
+    {
+        for (int i = 0; i < lfd.f->lock_table[lockIdx].nb_owners; i++)
+        {
+            if (0 != kill(lfd.f->lock_table[lockIdx].lock_owners[i].proc, 0)) //process is dead
+            {
+                if ((i+1) < lfd.f->lock_table[lockIdx].nb_owners)
+                {
+                    memmove(&lfd.f->lock_table[lockIdx].lock_owners[i],    // erase him from owners and shift left the rest
+                            &lfd.f->lock_table[lockIdx].lock_owners[i+1],
+                            sizeof(owner) * (lfd.f->lock_table[lockIdx].nb_owners - (i+1)) );
+                    i--;
+                }
+                lfd.f->lock_table[lockIdx].nb_owners--;    
+            }
+        }
+
+        if (!lfd.f->lock_table[lockIdx].nb_owners) //if there is no more owners for lock -> remove lock from lock_table
+        {
+            int nextLock = lfd.f->lock_table[lockIdx].next_lock;
+            lfd.f->lock_table[lockIdx].next_lock = NEXT_NULL;
+            
+            if (lfd.f->first == lockIdx)
+            {
+                lfd.f->first = nextLock;
+            }
+            lockIdx = nextLock;
+        }
+        else
+        {
+            lockIdx = lfd.f->lock_table[lockIdx].next_lock;    
+        }
+    }
+}
+
+static int add_owner(rl_descriptor lfd, rl_lock *lck)
+{
+    if (lck->nb_owners >= NB_OWNERS)
+    {
+        PROC_ERROR("Lock is full");
+        errno = EAGAIN;
+        return -1;
+    }
+
+    owner o;
+    o.des = lfd.d;
+    o.proc = getpid();
+
+    if (!has_owner(lck, &o))
+    {
+        lck->lock_owners[lck->nb_owners] = o;
+        lck->nb_owners ++;
+    }
+
+    return 0;
+}
+
+static int add_lock(rl_open_file *f, struct flock *lck, int d, int type)
+{
+    for (size_t szI = 0; szI < NB_LOCKS; szI ++)
+    {
+        if (f->lock_table[szI].len == 0)
+        {
+            f->lock_table[szI].next_lock           = f->first;
+            f->lock_table[szI].starting_offset     = lck->l_start;
+            f->lock_table[szI].len                 = lck->l_len;
+            f->lock_table[szI].type                = type;
+            f->lock_table[szI].lock_owners[0].proc = getpid();
+            f->lock_table[szI].lock_owners[0].des  = d;
+            f->lock_table[szI].nb_owners           = 1;
+
+            f->first = szI;
+            return 0;
+        }
+    }
+
+    PROC_ERROR("Lock has no free space");
+    errno = EAGAIN;
+    return -1;
+}
+
+static int add_read_lock_region(rl_descriptor lfd, struct flock *lck)
+{
+    //search for exact segment
+    int lockIdx = lfd.f->first;
+    while (lockIdx >= 0)
+    {
+        if (is_region_equal(lck->l_start, lck->l_len, &lfd.f->lock_table[lockIdx]))
+        {
+            if (is_owner(lfd.d, &lfd.f->lock_table[lockIdx]))
+            {
+                return 0;
+            }
+            else
+            {
+                return add_owner(lfd, &lfd.f->lock_table[lockIdx]);
+            }
+        }
+        lockIdx = lfd.f->lock_table[lockIdx].next_lock;    
+    }
+
+    //search for all intersections where lfd is owner
+    lockIdx = lfd.f->first;
+    while (lockIdx >= 0)
+    {
+        if (    (is_region_intersection_or_neighbour(lck->l_start, lck->l_len, &lfd.f->lock_table[lockIdx]))
+             && (is_owner(lfd.d, &lfd.f->lock_table[lockIdx]))
+           )
+        {
+            off_t newStart = MIN(lck->l_start, lfd.f->lock_table[lockIdx].starting_offset);
+            off_t newEnd1  = lck->l_start + lck->l_len;
+            off_t newEnd2  = lfd.f->lock_table[lockIdx].starting_offset + lfd.f->lock_table[lockIdx].len;
+            off_t newLen   = MAX(newEnd1, newEnd2) - newStart; 
+
+            lck->l_start = newStart;
+            lck->l_len   = newLen;
+
+            int nextIdx = lfd.f->lock_table[lockIdx].next_lock;    
+            delete_owner(lfd.f, lockIdx, lfd.d);
+            lockIdx = nextIdx;
+        }
+        else
+        {
+            lockIdx = lfd.f->lock_table[lockIdx].next_lock;    
+        }
+    }
+
+    return add_lock(lfd.f, lck, lfd.d, F_RDLCK);
+}
+
+static int add_write_lock_region(rl_descriptor lfd, struct flock *lck)
+{
+    int lockIdx = lfd.f->first;
+    while (lockIdx >= 0)
+    {
+        if (    (    (    (is_region_intersection_or_neighbour(lck->l_start, lck->l_len, &lfd.f->lock_table[lockIdx]))
+                       && (lfd.f->lock_table[lockIdx].type == lck->l_type)
+                     )
+                  || (is_region_intersection(lck->l_start, lck->l_len, &lfd.f->lock_table[lockIdx]))
+                ) 
+             && (is_owner(lfd.d, &lfd.f->lock_table[lockIdx]))
+           )
+        {
+            off_t newStart = MIN(lck->l_start, lfd.f->lock_table[lockIdx].starting_offset);
+            off_t newEnd1  = lck->l_start + lck->l_len;
+            off_t newEnd2  = lfd.f->lock_table[lockIdx].starting_offset + lfd.f->lock_table[lockIdx].len;
+            off_t newLen   = MAX(newEnd1, newEnd2) - newStart; 
+
+            lck->l_start = newStart;
+            lck->l_len   = newLen;
+
+            int nextIdx = lfd.f->lock_table[lockIdx].next_lock;    
+            delete_owner(lfd.f, lockIdx, lfd.d);
+            lockIdx = nextIdx;
+        }
+        else
+        {
+            lockIdx = lfd.f->lock_table[lockIdx].next_lock;    
+        }
+    }
+
+    return add_lock(lfd.f, lck, lfd.d, F_WRLCK);
+}
+
+static int delete_lock_region(rl_descriptor lfd, struct flock *lck)
+{
+    int lockIdx = lfd.f->first;
+    while (lockIdx >= 0)
+    {
+        if (    (is_region_intersection(lck->l_start, lck->l_len, &lfd.f->lock_table[lockIdx]))
+             && (is_owner(lfd.d, &lfd.f->lock_table[lockIdx]))
+           )
+        {
+            off_t unlStart = lck->l_start;
+            off_t unlEnd   = lck->l_start + lck->l_len;
+            off_t lckStart = lfd.f->lock_table[lockIdx].starting_offset;
+            off_t lckEnd   = lfd.f->lock_table[lockIdx].starting_offset + lfd.f->lock_table[lockIdx].len;
+
+            //if lock region is include in unlock region
+            if ((unlStart <= lckStart) && (unlEnd >= lckEnd))
+            {
+                int nextIdx = lfd.f->lock_table[lockIdx].next_lock;    
+                delete_owner(lfd.f, lockIdx, lfd.d);
+                lockIdx = nextIdx;
+            }
+            //unlock region is include in lock region -> remove owner, make 2 and start from beginning because we add
+            //new region to head
+            else if ((unlStart > lckStart) && (unlEnd < lckEnd))
+            {
+                struct flock lckLeft  = *lck;
+                struct flock lckRight = *lck;
+                lckLeft.l_start = lckStart;
+                lckLeft.l_len   = unlStart - lckStart;
+
+                lckRight.l_start = unlEnd;
+                lckRight.l_len   = lckEnd - unlEnd;
+
+                if (    (0 != add_lock(lfd.f, &lckLeft,  lfd.d, lfd.f->lock_table[lockIdx].type))
+                     || (0 != add_lock(lfd.f, &lckRight, lfd.d, lfd.f->lock_table[lockIdx].type))
+                   )
+                {
+                    return -1;
+                }
+
+                delete_owner(lfd.f, lockIdx, lfd.d);
+                lockIdx = lfd.f->first;
+            }
+            //unlock region has right intersection with lock region, remove owner, split and start from beginning because we add
+            //new region to head
+            else if ((unlStart <= lckStart) && (unlEnd <= lckEnd))
+            {
+                struct flock lckRight  = *lck;
+                lckRight.l_start = unlEnd;
+                lckRight.l_len   = lckEnd - unlEnd;
+
+                if (0 != add_lock(lfd.f, &lckRight, lfd.d, lfd.f->lock_table[lockIdx].type))
+                {
+                    return -1;
+                }
+
+                delete_owner(lfd.f, lockIdx, lfd.d);
+                lockIdx = lfd.f->first;
+            }            
+            //unlock region has right intersection with lock region, remove owner, split and start from beginning because we add
+            //new region to head
+            else if ((unlStart >= lckStart) && (unlEnd >= lckEnd))
+            {
+                struct flock lckLeft  = *lck;
+                lckLeft.l_start = lckStart;
+                lckLeft.l_len   = unlStart - lckStart;
+
+                if (0 != add_lock(lfd.f, &lckLeft, lfd.d, lfd.f->lock_table[lockIdx].type))
+                {
+                    return -1;
+                }
+
+                delete_owner(lfd.f, lockIdx, lfd.d);
+                lockIdx = lfd.f->first;
+            }            
+        }
+        else
+        {
+            lockIdx = lfd.f->lock_table[lockIdx].next_lock;    
+        }
+    }
+
+    return 0;
+}
 

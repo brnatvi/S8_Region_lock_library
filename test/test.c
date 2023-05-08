@@ -3,7 +3,8 @@
 
 #define SHR_TEST_SEM        "/rl_test_shared_sem"
 
-#define PROC_ERROR(Message) { fprintf(stderr, "%s : error {%s} in file {%s} on line {%d}\n", Message, strerror(errno), __FILE__, __LINE__); }
+#define PROC_ERROR(Message) { fprintf(stderr, "%s : error {%s} in file {%s} on line {%d}\n", \
+                                                Message, strerror(errno), __FILE__, __LINE__); }\
 
 //https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_(Select_Graphic_Rendition)_parameters
 #define KNRM                "\x1B[0m\n"
@@ -43,6 +44,8 @@ static int indexTest = 0;
         }\
     }\
 
+    
+
 
 bool test_reference_counter(const char *fileName)
 {
@@ -56,7 +59,7 @@ bool test_reference_counter(const char *fileName)
         return false;
     }
 
-    // dup2
+    // dup
     rl_descriptor rl_fd2 = rl_dup(rl_fd1);
     if (rl_fd2.f == NULL)
     {
@@ -91,8 +94,6 @@ bool test_reference_counter(const char *fileName)
         sem_wait(sharedSem);
         sem_close(sharedSem);
         sem_unlink(SHR_TEST_SEM);
-        
-        printf("close %d : \n", rl_fd1.d);
 
         rl_close(rl_fd2);
 
@@ -102,8 +103,144 @@ bool test_reference_counter(const char *fileName)
 }
 
 
+bool test_regions(const char *fileName)
+{
+    rl_descriptor rl_fd1 = rl_open(fileName, O_RDWR, S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH);
+    rl_descriptor rl_fd2 = rl_open(fileName, O_RDWR, S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH);
+
+    struct flock lck;
+    lck.l_start  = 0;
+    lck.l_len    = 100; 
+    lck.l_pid    = getpid();
+    lck.l_whence = SEEK_SET;
+    lck.l_type   = F_RDLCK;
+
+    if (0 != rl_fcntl(rl_fd1, F_SETLK, &lck))
+    {
+        return false;
+    }
+
+    lck.l_start  = 50;
+    lck.l_len    = 100; 
+    lck.l_pid    = getpid();
+    lck.l_whence = SEEK_SET;
+    lck.l_type   = F_WRLCK;
+
+    if (0 == rl_fcntl(rl_fd2, F_SETLK, &lck))
+    {
+        return false;
+    }
+
+    lck.l_start  = 0;
+    lck.l_len    = 100; 
+    lck.l_pid    = getpid();
+    lck.l_whence = SEEK_SET;
+    lck.l_type   = F_UNLCK;
+    if (0 != rl_fcntl(rl_fd1, F_SETLK, &lck))
+    {
+        return false;
+    }
+
+    //checking for region joining: we have NB_LOCKS = 10 so trying to push more
+    //has to generate error if inside we are not joining them
+    for (int i = 0; i < 2* NB_LOCKS; i++)
+    {
+        lck.l_start  = i*50;
+        lck.l_len    = 50; 
+        lck.l_pid    = getpid();
+        lck.l_whence = SEEK_SET;
+        lck.l_type   = F_WRLCK;
+
+        if (0 != rl_fcntl(rl_fd1, F_SETLK, &lck))
+        {
+            return false;
+        }
+    }
+
+    rl_print(rl_fd1);
+
+    lck.l_start  = 0;
+    lck.l_len    = 1000; 
+    lck.l_pid    = getpid();
+    lck.l_whence = SEEK_SET;
+    lck.l_type   = F_UNLCK;
+    if (0 != rl_fcntl(rl_fd1, F_SETLK, &lck))
+    {
+        return false;
+    }
 
 
+    lck.l_start  = 0;
+    lck.l_len    = 500; 
+    lck.l_pid    = getpid();
+    lck.l_whence = SEEK_SET;
+    lck.l_type   = F_RDLCK;
+    if (0 != rl_fcntl(rl_fd1, F_SETLK, &lck))
+    {
+        return false;
+    }
+
+    lck.l_start  = 1000;
+    lck.l_len    = 500; 
+    lck.l_pid    = getpid();
+    lck.l_whence = SEEK_SET;
+    lck.l_type   = F_RDLCK;
+    if (0 != rl_fcntl(rl_fd1, F_SETLK, &lck))
+    {
+        return false;
+    }
+
+    //transofrm to write 2 prev locks
+    lck.l_start  = 0;
+    lck.l_len    = 1500; 
+    lck.l_pid    = getpid();
+    lck.l_whence = SEEK_SET;
+    lck.l_type   = F_WRLCK;
+    if (0 != rl_fcntl(rl_fd1, F_SETLK, &lck))
+    {
+        return false;
+    }
+
+    //must fail = region [0..1500] is busy by WR exclusive lock rl_fd1
+    lck.l_start  = 0;
+    lck.l_len    = 500; 
+    lck.l_pid    = getpid();
+    lck.l_whence = SEEK_SET;
+    lck.l_type   = F_RDLCK;
+    if (0 == rl_fcntl(rl_fd2, F_SETLK, &lck))
+    {
+        return false;
+    }
+
+    //must fail = region [0..1500] is busy by WR exclusive lock rl_fd1
+    lck.l_start  = 500;
+    lck.l_len    = 500; 
+    lck.l_pid    = getpid();
+    lck.l_whence = SEEK_SET;
+    lck.l_type   = F_RDLCK;
+    if (0 == rl_fcntl(rl_fd2, F_SETLK, &lck))
+    {
+        return false;
+    }
+
+    //must fail = region [0..1500] is busy by WR exclusive lock rl_fd1
+    lck.l_start  = 1000;
+    lck.l_len    = 500; 
+    lck.l_pid    = getpid();
+    lck.l_whence = SEEK_SET;
+    lck.l_type   = F_RDLCK;
+    if (0 == rl_fcntl(rl_fd2, F_SETLK, &lck))
+    {
+        return false;
+    }
+
+    rl_print(rl_fd1);
+
+    rl_close(rl_fd1);
+    rl_close(rl_fd2);
+
+    return true;
+}
 
 
 int main(int argc, const char *argv[])
@@ -126,8 +263,11 @@ int main(int argc, const char *argv[])
     printf("[%d] file to Process : %s, test : %d\n", getpid(), argv[1], indexTest);
 
     TEST_EXEC(test_reference_counter(argv[1]), "test_reference_counter", 1);
+    TEST_EXEC(test_regions(argv[1]), "test_regions", 2);
 
 lExit:
     printf("[%d] exit process\n", getpid());
     return res;
 }
+
+

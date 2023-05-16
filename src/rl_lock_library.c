@@ -56,22 +56,38 @@ static bool  g_is_initialized = false;
 
 /* ================================  AUXILIARY FUNCTIONS DEFINITIONS  =============================================== */
 
-//TODO: doc
-// int add_new_owner(rl_descriptor lfd, int newd);
-// 1 si oui, 0 si own non dans table, -1 si capacité max
+/**
+ * check ability to add new owner
+ * @param own owner
+ * @param f file descriptor
+ * @return 1 si oui, 0 si own non dans table, -1 si capacité max
+ */
 static int can_add_new_owner(owner own, rl_open_file *f);
 
-//TODO: doc
-// assume we can add
+/**
+ * add new owner
+ * @param own current owner
+ * @param new_owner new owner
+ * @param f file descriptor
+ * @return −1 in case of error, 0 - success
+ */
 static int add_new_owner(owner own, owner new_owner, rl_open_file *f);
 
-//TODO: doc
-//int add_new_owner();
-// -1 si impossible, 0 sinon
+/**
+ * check ability to add new owner by pid
+ * @param parent parent pid
+ * @param f file descriptor
+ * @return −1 in case of error, 0 - success
+ */
 static int can_add_new_owner_by_pid(pid_t parent, rl_open_file *f);
 
-//TODO: doc
-// assume we can add
+/**
+ * add new owner by pid
+ * @param parent parent pid
+ * @param parent child pid
+ * @param f file descriptor
+ * @return −1 in case of error, 0 - success
+ */
 static int add_new_owner_by_pid(pid_t parent, pid_t fils, rl_open_file *f);
 
 /**
@@ -116,38 +132,138 @@ static bool make_shared_name_by_path(const char *filePath, char type, char *name
  */
 static bool make_shared_name_by_fd(int fd, char type, char *name, size_t maxLen);
 
+/**
+ * Get file size
+ * @return file size in bytes
+ */
 static uint64_t get_file_size(int fd);
 
+/**
+ * Get current file position
+ * @return file position
+ */
 static uint64_t get_current_position(int fd);
 
+/**
+ * removes all locks if owners aren't alive
+ * @param lfd [in] file descriptor
+ */
 static void rl_clear_dead_owners(rl_descriptor lfd);
 
+/**
+ * delete lock by index
+ * @param f file descriptor
+ * @param index lock index
+ */
 static void delete_lock(rl_open_file *f, int index);
 
+/**
+ * delete owner
+ * @param f rl file descriptor
+ * @param index lock index
+ * @param d file descriptor
+ */
 static void delete_owner(rl_open_file *f, int index, int d);
 
+/**
+ * delete lock region
+ * @param lfd rl descriptor
+ * @param lck lock descriptor
+ * @return −1 in case of error, 0 - success
+ */
 static int delete_lock_region(rl_descriptor lfd, struct flock *lck);
 
+/**
+ * add lock region for writing
+ * @param lfd rl descriptor
+ * @param lck lock descriptor
+ * @return −1 in case of error, 0 - success
+ */
 static int add_write_lock_region(rl_descriptor lfd, struct flock *lck);
 
+/**
+ * add lock region for reading
+ * @param lfd rl descriptor
+ * @param lck lock descriptor
+ * @return −1 in case of error, 0 - success
+ */
 static int add_read_lock_region(rl_descriptor lfd, struct flock *lck);
 
+/**
+ * add new lock
+ * @param f rl file descriptor
+ * @param lck lock descriptor
+ * @param d file descriptor
+ * @param type lock type
+ * @return −1 in case of error, 0 - success
+ */
 static int add_lock(rl_open_file *f, struct flock *lck, int d, int type);
 
+/**
+ * add new lock owner
+ * @param lfd rl descriptor
+ * @param lck lock descriptor
+ * @return −1 in case of error, 0 - success
+ */
 static int add_owner(rl_descriptor lfd, rl_lock *lck);
 
+/**
+ * check new lock and current locks compatibility
+ * @param lfd rl descriptor
+ * @param lck new lock descriptor
+ * @return true - compatible, false - otherwise
+ */
 static bool is_rl_compatible(rl_descriptor lfd, struct flock *lck);
 
+/**
+ * check if lock has other owners than d
+ * @param d file descriptor
+ * @param lck lock descriptor
+ * @return true - it has, false - it hasn't
+ */
 static bool is_other_owner(int d, rl_lock *lck);
 
+/**
+ * check that lock has owner
+ * @param d file descriptor
+ * @param lck lock descriptor
+ * @return true - it has, false - it hasn't
+ */
 static bool is_owner(int d, rl_lock *lck);
 
+/**
+ * check that regions are matching
+ * @param offset region offset
+ * @param len region len
+ * @param lck lock descriptor
+ * @return true - equal, false - not
+ */
 static bool is_region_equal(off_t offset, off_t len, rl_lock *lck);
 
+/**
+ * check that region has intersections or neighbours 
+ * @param offset region offset
+ * @param len region len
+ * @param lck lock descriptor
+ * @return true - there is(are), false - not
+ */
 static bool is_region_intersection_or_neighbour(off_t offset, off_t len, rl_lock *lck);
 
+/**
+ * check that region has intersections
+ * @param offset region offset
+ * @param len region len
+ * @param lck lock descriptor
+ * @return true - there is(are), false - not
+ */
 static bool is_region_intersection(off_t offset, off_t len, rl_lock *lck);
 
+/**
+ * check that region has intersections
+ * @param l lock
+ * @param o owner
+ * @return true - lock has owner, false - otherwise
+ */
 bool has_owner(rl_lock *l, owner *o);
 
 
@@ -639,29 +755,7 @@ pid_t rl_fork()
     return pid;
 }
 
-/*
-int rl_fcntl(rl_descriptor lfd, int cmd, struct flock *lck) {
-    owner lfd_owner = {.proc = getpid(), .des = lfd.d};
-    if(cmd == F_SETLK) {
-        if(lck->l_type == F_UNLCK) {
-            // lever verrou au milieu d'un segment => deux segments verrouillés
-            // TODO : parcourir lfd.f
-            // verifier sur quels endroits sont posés les verrous
-            // si séparation en deux segments verrouillés -> can_add_new_owner + add_new_owner(owner,owner,...)
-            // si owner non dans table => ERREUR
-            
-            
-        }
-        else if(lck->l_type == F_RDLCK){
 
-        }
-        else if(lck->l_type == F_WRLCK) {
-
-        }
-    }
-    return 0;
-}
-*/
 int rl_fcntl(rl_descriptor lfd, int cmd, struct flock *lck)
 {
     if ((lfd.d == FILE_UNK) || (!lfd.f) || (F_GETLK == cmd) || (!lck))

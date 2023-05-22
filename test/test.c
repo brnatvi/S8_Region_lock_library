@@ -242,6 +242,183 @@ bool test_regions(const char *fileName)
     return true;
 }
 
+bool test_cross_process(const char *fileName, int test)
+{
+    rl_descriptor rl_fd = rl_open(fileName, O_RDWR, S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH);
+
+    printf(">> test_cross_process call from %d\n",  getpid());
+
+    sem_t *sharedSem = NULL;
+    if (test == TEST_ALL)  //parent
+    {
+        struct flock lck;
+        lck.l_start  = 0;
+        lck.l_len    = 100; 
+        lck.l_pid    = getpid();
+        lck.l_whence = SEEK_SET;
+        lck.l_type   = F_RDLCK;
+
+        if (0 != rl_fcntl(rl_fd, F_SETLK, &lck))
+        {
+            return false;
+        }
+
+        lck.l_start  = 100;
+        lck.l_len    = 100; 
+        lck.l_pid    = getpid();
+        lck.l_whence = SEEK_SET;
+        lck.l_type   = F_WRLCK;
+
+        if (0 != rl_fcntl(rl_fd, F_SETLK, &lck))
+        {
+            return false;
+        }
+
+        sharedSem = sem_open(SHR_TEST_SEM, O_CREAT, S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH, 0);
+
+        if (0 == fork()) 
+        {
+            if (-1 == execl("./bin/rl_lock_test", "rl_lock_test", "test_file.sql", "3", NULL)) 
+            {
+                perror("child process execve failed");
+                return false;
+            }
+        }
+
+        sem_wait(sharedSem);
+        sem_close(sharedSem);
+        sem_unlink(SHR_TEST_SEM);
+
+        rl_print(rl_fd);
+
+        return (0 == rl_close(rl_fd));
+    }
+    else
+    {
+        bool bError = false;
+        sharedSem = sem_open(SHR_TEST_SEM, 0);
+
+        struct flock lck;
+        lck.l_start  = 0;
+        lck.l_len    = 100; 
+        lck.l_pid    = getpid();
+        lck.l_whence = SEEK_SET;
+        lck.l_type   = F_RDLCK;
+
+        if (0 != rl_fcntl(rl_fd, F_SETLK, &lck))
+        {
+            bError = true;
+        }
+
+        lck.l_start  = 100;
+        lck.l_len    = 100; 
+        lck.l_pid    = getpid();
+        lck.l_whence = SEEK_SET;
+        lck.l_type   = F_WRLCK;
+
+        if (0 == rl_fcntl(rl_fd, F_SETLK, &lck))
+        {
+            bError = true;
+        }
+
+        rl_print(rl_fd);
+
+        sem_post(sharedSem);
+        sem_close(sharedSem);
+
+        if (!bError)
+        {
+            rl_close(rl_fd);            
+        }
+    }
+
+    return true;
+}
+
+
+bool test_record_blocking_request(const char *fileName)
+{
+    printf("file to open : %s\n", fileName);
+
+    rl_descriptor rl_fd = rl_open(fileName, O_RDWR, S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH);
+
+    if (rl_fd.f == NULL)
+    {
+        return false;
+    }
+
+    struct flock lck;
+    lck.l_start  = 0;
+    lck.l_len    = 800; 
+    lck.l_pid    = getpid();
+    lck.l_whence = SEEK_SET;
+    lck.l_type   = F_WRLCK;
+    if (0 != rl_fcntl(rl_fd, F_SETLK, &lck))
+    {
+        return false;
+    }
+
+    sem_t *sharedSem = sem_open(SHR_TEST_SEM, O_CREAT, S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH, 0);
+
+    pid_t pid = rl_fork();
+    if (-1 == pid)
+    {
+        return false;
+    }
+    if (0 == pid)
+    {
+        sharedSem = sem_open(SHR_TEST_SEM, 0);
+
+        sem_post(sharedSem);
+
+        lck.l_start  = 200;
+        lck.l_len    = 200; 
+        lck.l_pid    = getpid();
+        lck.l_whence = SEEK_SET;
+        lck.l_type   = F_WRLCK;
+        if (0 != rl_fcntl(rl_fd, F_SETLKW, &lck))
+        {
+            return false;
+        }
+
+        rl_print(rl_fd);
+
+        rl_close(rl_fd);
+        
+        sem_post(sharedSem);
+        sem_close(sharedSem);
+        iTest = 4; // only this test
+
+        return true;
+    }
+    else
+    {
+        sem_wait(sharedSem); //wait process to start
+        sleep(1); //sleep for 1 second to let other process to enter to blocking mode
+
+        //release block region to let other process to take it
+        lck.l_start  = 200;
+        lck.l_len    = 200; 
+        lck.l_pid    = getpid();
+        lck.l_whence = SEEK_SET;
+        lck.l_type   = F_UNLCK;
+        if (0 != rl_fcntl(rl_fd, F_SETLK, &lck))
+        {
+            return false;
+        }
+
+        sem_wait(sharedSem);
+        sem_close(sharedSem);
+        sem_unlink(SHR_TEST_SEM);
+
+        rl_print(rl_fd);
+
+        return (0 == rl_close(rl_fd));
+    }
+
+    return false;
+}
+
 
 int main(int argc, const char *argv[])
 {
@@ -264,6 +441,8 @@ int main(int argc, const char *argv[])
 
     TEST_EXEC(test_reference_counter(argv[1]), "test_reference_counter", 1);
     TEST_EXEC(test_regions(argv[1]), "test_regions", 2);
+    TEST_EXEC(test_cross_process(argv[1], iTest), "test_cross_process", 3);
+    TEST_EXEC(test_record_blocking_request(argv[1]), "test_record_blocking_request", 4);
 
 lExit:
     printf("[%d] exit process\n", getpid());

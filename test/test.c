@@ -276,14 +276,17 @@ bool test_cross_process(const char *fileName, int test)
 
         sharedSem = sem_open(SHR_TEST_SEM, O_CREAT, S_IRUSR|S_IRGRP|S_IROTH|S_IWUSR|S_IWGRP|S_IWOTH, 0);
 
+        
         if (0 == fork()) 
+        
         {
-            if (-1 == execl("./bin/rl_lock_test", "rl_lock_test", "test_file.sql", "3", NULL)) 
+            if (-1 == execl("./bin/rl_lock_test", "rl_lock_test", fileName, "3", NULL)) 
             {
                 perror("child process execve failed");
                 return false;
             }
         }
+        
 
         sem_wait(sharedSem);
         sem_close(sharedSem);
@@ -387,7 +390,7 @@ bool test_record_blocking_request(const char *fileName)
         
         sem_post(sharedSem);
         sem_close(sharedSem);
-        iTest = 4; // only this test
+        indexTest = 4; // only this test
 
         return true;
     }
@@ -420,6 +423,7 @@ bool test_record_blocking_request(const char *fileName)
 }
 
 
+
 int main(int argc, const char *argv[])
 {
     if (argc != 3)
@@ -441,7 +445,9 @@ int main(int argc, const char *argv[])
 
     TEST_EXEC(test_reference_counter(argv[1]), "test_reference_counter", 1);
     TEST_EXEC(test_regions(argv[1]), "test_regions", 2);
-    TEST_EXEC(test_cross_process(argv[1], iTest), "test_cross_process", 3);
+
+    TEST_EXEC(test_cross_process(argv[1], indexTest), "test_cross_process", 3);
+
     TEST_EXEC(test_record_blocking_request(argv[1]), "test_record_blocking_request", 4);
 
 lExit:

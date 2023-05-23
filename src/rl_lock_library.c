@@ -680,51 +680,6 @@ lExit:
     return ret;
 }
 
-/*
-pid_t rl_fork() {
-    
-    pid_t pid;
-    switch(pid = fork()) {
-        case -1 :
-            PROC_ERROR("fork() failure");
-            return -1;
-        case 0 :
-            // semaphore            
-            pthread_mutex_lock(&rl_all_files.mutex);
-            for(int i = 0; i < rl_all_files.nb_files; i++){
-                // lock
-                pthread_mutex_lock(&rl_all_files.tab_open_files[i]->mutex);
-                // gestion erreur
-                if(can_add_new_owner_by_pid(getppid(), rl_all_files.tab_open_files[i]) == -1) {
-                    // lever lock + semaphore
-                    pthread_mutex_unlock(&rl_all_files.tab_open_files[i]->mutex);
-                    pthread_mutex_unlock(&rl_all_files.mutex);
-                    PROC_ERROR("rl_fork() failure NB_OWNERS at max");
-                    return -1;
-                }
-                // unlock
-                pthread_mutex_unlock(&rl_all_files.tab_open_files[i]->mutex);
-            }
-            for(int i = 0; i < rl_all_files.nb_files; i++){
-                // lock
-                pthread_mutex_lock(&rl_all_files.tab_open_files[i]->mutex);
-                add_new_owner_by_pid(getppid(), getpid(), rl_all_files.tab_open_files[i]);
-                // unlock
-                pthread_mutex_unlock(&rl_all_files.tab_open_files[i]->mutex);
-            }
-            pthread_mutex_unlock(&rl_all_files.mutex);
-            exit(EXIT_SUCCESS);
-        default :
-            if(wait(NULL) == -1) { // necessaire ?
-                PROC_ERROR("wait() failure");
-                return -1;
-            }
-            return pid;
-    }
-}
-
-*/
-
 pid_t rl_fork() 
 {
     for(int i = 0; i < rl_all_files.nb_files; i++)

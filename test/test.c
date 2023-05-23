@@ -278,7 +278,7 @@ bool test_cross_process(const char *fileName, int test)
 
         if (0 == fork()) 
         {
-            if (-1 == execl("./bin/rl_lock_test", "rl_lock_test", "test_file.sql", "3", NULL)) 
+            if (-1 == execl("./bin/rl_lock_test", "rl_lock_test", fileName, "3", NULL)) 
             {
                 perror("child process execve failed");
                 return false;

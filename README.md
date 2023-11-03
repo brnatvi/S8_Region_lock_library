@@ -23,9 +23,10 @@ The files `/bin/librl_lock_library.a`  and `include/rl_lock_library.h` are avail
 `./bin/rl_lock_test       <some_file_on_root_progect>          <index_test>`
 
 <index_test> in range [0 .. 4]
+
 <index_test> = 0 to run all tests.
 
 
 ## Maintainers
-BRAGINA Natalia
-VIGNESWARAN Tharsiya
+- BRAGINA Natalia
+- VIGNESWARAN Tharsiya
